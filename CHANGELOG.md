@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 - Added `summaryModel` config for choosing the default curator summary draft model from `~/.pi/web-search.json`.
 
 ### Fixed
+- Restored `code_search` after Exa removed the `get_code_context_exa` MCP tool by falling back to `web_search_exa` with code-focused queries.
 - Migrated extension tool schemas from `@sinclair/typebox` to Pi's bundled `typebox` 1.x import path.
 
 ## [0.10.6] - 2026-04-04
