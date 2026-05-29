@@ -59,21 +59,34 @@ Measured extension input-token footprint:
 
 ## Install
 
-From a local checkout:
+From npm:
 
 ```bash
-pi install /path/to/pi-web-access-lean
+pi install npm:pi-web-access-lean
 ```
 
 Or add it to Pi settings:
 
 ```json
 {
-  "packages": ["/path/to/pi-web-access-lean"]
+  "packages": ["npm:pi-web-access-lean"]
 }
 ```
 
-Requires Pi v0.37.3+.
+From GitHub:
+
+```bash
+pi install git:github.com/Nabsku/pi-web-access-lean
+```
+
+From a local checkout, useful while developing:
+
+```bash
+git clone https://github.com/Nabsku/pi-web-access-lean.git
+pi install /path/to/pi-web-access-lean
+```
+
+Requires Pi Coding Agent with extension support.
 
 ## Configuration
 

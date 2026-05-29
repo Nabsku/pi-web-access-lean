@@ -1,6 +1,6 @@
 {
   "name": "pi-web-access-lean",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Lean web search, URL fetching, code search, GitHub repo cloning, and PDF extraction for Pi coding agent",
   "type": "module",
   "scripts": {
