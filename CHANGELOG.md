@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Lean fork keeps the coding-agent daily path: `web_search`, `code_search`, `fetch_content`, GitHub repository extraction, PDF extraction, HTML/Readability extraction, RSC extraction, and the activity widget.
+- Renamed the search router from `gemini-search.ts` to `search.ts` because Gemini providers are no longer part of this fork.
+
+### Removed
+- Removed curator/review UI, browser-cookie Gemini paths, Gemini API/search fallback, YouTube/video extraction, bundled librarian skill, stored-content retrieval, demo media, and verbose prompt/schema surface.
+
+### Fixed
+- Added pnpm ignored-build metadata for transitive Pi dev dependencies so GitHub installs do not fail on blocked `@google/genai`/`protobufjs` build scripts.
+
+## Upstream history
+
+The entries below are from the original upstream `pi-web-access` project before this lean fork.
+
 ## [0.10.7] - 2026-05-02
 
 ### Added
