@@ -29,9 +29,9 @@
     "unpdf": "^1.6.2"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.77.0",
-    "@earendil-works/pi-coding-agent": "^0.77.0",
-    "@earendil-works/pi-tui": "^0.77.0",
+    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@earendil-works/pi-tui": "^0.78.0",
     "@types/node": "^25.9.1",
     "@types/turndown": "^5.0.6",
     "typescript": "^6.0.3"
