@@ -1,0 +1,251 @@
+name: Upstream Sync Report
+
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "Upstream branch to inspect"
+        required: false
+        default: "main"
+      create_issue:
+        description: "Open or update the upstream-sync tracking issue when changes exist"
+        required: false
+        default: "true"
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-sync-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Compare lean fork with upstream
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_URL: https://github.com/nicobailon/pi-web-access.git
+      UPSTREAM_REF: ${{ github.event.inputs.upstream_ref || 'main' }}
+      CREATE_ISSUE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_issue || 'true' }}
+      ISSUE_TITLE: "Upstream sync report: nicobailon/pi-web-access"
+      ISSUE_LABEL: upstream-sync
+    steps:
+      - name: Checkout lean fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate upstream sync report
+        id: sync
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${UPSTREAM_REF}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || [[ "${UPSTREAM_REF}" == *..* ]] || [[ "${UPSTREAM_REF}" == */ ]] || [[ "${UPSTREAM_REF}" == *//* ]]; then
+            echo "Invalid upstream_ref: ${UPSTREAM_REF}" >&2
+            exit 1
+          fi
+
+          git remote add upstream "${UPSTREAM_URL}" 2>/dev/null || git remote set-url upstream "${UPSTREAM_URL}"
+          git fetch --no-tags upstream "+refs/heads/${UPSTREAM_REF}:refs/remotes/upstream/${UPSTREAM_REF}"
+
+          upstream_remote="refs/remotes/upstream/${UPSTREAM_REF}"
+          upstream_sha="$(git rev-parse "${upstream_remote}")"
+          last_reviewed_sha="$(node -e 'const fs = require("node:fs"); const state = JSON.parse(fs.readFileSync(".github/upstream-sync.json", "utf8")); process.stdout.write(state.lastReviewedSha || "");')"
+
+          base_sha="${last_reviewed_sha}"
+          base_note="last reviewed upstream SHA"
+          if [[ -z "${base_sha}" ]] || ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+            base_sha="$(git merge-base HEAD "${upstream_remote}" || true)"
+            base_note="fallback merge-base with current fork"
+          fi
+
+          if [[ -z "${base_sha}" ]]; then
+            echo "Unable to determine upstream comparison base" >&2
+            exit 1
+          fi
+
+          report_path="${RUNNER_TEMP}/upstream-sync-report.md"
+          has_changes="false"
+          if [[ "${base_sha}" != "${upstream_sha}" ]]; then
+            has_changes="true"
+          fi
+
+          export BASE_SHA="${base_sha}"
+          export BASE_NOTE="${base_note}"
+          export UPSTREAM_SHA="${upstream_sha}"
+          export UPSTREAM_REMOTE="${upstream_remote}"
+          export REPORT_PATH="${report_path}"
+          export HAS_CHANGES="${has_changes}"
+
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const fs = require("node:fs");
+
+          const baseSha = process.env.BASE_SHA;
+          const baseNote = process.env.BASE_NOTE;
+          const upstreamSha = process.env.UPSTREAM_SHA;
+          const upstreamRemote = process.env.UPSTREAM_REMOTE;
+          const upstreamRef = process.env.UPSTREAM_REF;
+          const reportPath = process.env.REPORT_PATH;
+          const hasChanges = process.env.HAS_CHANGES === "true";
+          const generatedAt = new Date().toISOString();
+
+          function git(args) {
+            return execFileSync("git", args, { encoding: "utf8" }).trim();
+          }
+
+          function lines(value) {
+            return value ? value.split("\n").filter(Boolean) : [];
+          }
+
+          function unique(values) {
+            return [...new Set(values)];
+          }
+
+          const relevantPatterns = [
+            /^(index|search|code-search|exa|perplexity|extract|github-extract|github-api|pdf-extract|rsc-extract|activity|utils)\.ts$/,
+            /^test\//,
+            /^package(-lock)?\.json$/,
+            /^(README|CHANGELOG)\.md$/,
+          ];
+          const skipPatterns = [
+            /(^|\/)(curator|summary-review|gemini|youtube|video|chrome-cookies|stored-content|search-filter)([-._/]|$)/i,
+            /(^|\/)(demo|demos|media|assets)(\/|$)/i,
+            /cookie/i,
+          ];
+
+          function bucketForFiles(files) {
+            const relevant = files.filter((file) => relevantPatterns.some((pattern) => pattern.test(file)));
+            const skipped = files.filter((file) => skipPatterns.some((pattern) => pattern.test(file)));
+            const other = files.filter((file) => !relevant.includes(file) && !skipped.includes(file));
+            return { relevant, skipped, other };
+          }
+
+          function bulletList(items, fallback) {
+            if (items.length === 0) return `- ${fallback}\n`;
+            return items.map((item) => `- ${item}`).join("\n") + "\n";
+          }
+
+          let commits = [];
+          let allFiles = [];
+          if (hasChanges) {
+            const range = `${baseSha}..${upstreamRemote}`;
+            allFiles = lines(git(["diff", "--name-only", range]));
+            commits = lines(git(["log", "--reverse", "--format=%H%x00%h%x00%cs%x00%an%x00%s", range])).map((line) => {
+              const [sha, shortSha, date, author, subject] = line.split("\0");
+              const files = lines(git(["diff-tree", "--no-commit-id", "--name-only", "-r", sha]));
+              return { sha, shortSha, date, author, subject, files, buckets: bucketForFiles(files) };
+            });
+          }
+
+          const fileBuckets = bucketForFiles(allFiles);
+          const relevantCommits = commits.filter((commit) => commit.buckets.relevant.length > 0);
+          const skippedCommits = commits.filter((commit) => commit.buckets.relevant.length === 0 && commit.buckets.skipped.length > 0);
+          const reviewCommits = commits.filter((commit) => commit.buckets.relevant.length === 0 && commit.buckets.skipped.length === 0);
+          const conflictHotspots = unique([
+            ...fileBuckets.relevant,
+            ...allFiles.filter((file) => file === "package.json" || file === "package-lock.json"),
+          ]);
+
+          let report = "# Upstream sync report\n\n";
+          report += `- Upstream: nicobailon/pi-web-access\n`;
+          report += `- Upstream ref: ${upstreamRef}\n`;
+          report += `- Base: ${baseSha} (${baseNote})\n`;
+          report += `- Head: ${upstreamSha}\n`;
+          report += `- Generated: ${generatedAt}\n`;
+          report += `- Mode: report only; no merge, no cherry-pick, no push\n\n`;
+
+          if (!hasChanges) {
+            report += "## Status\n\nNo upstream commits detected since last reviewed SHA.\n\n";
+          } else {
+            report += `## Summary\n\n`;
+            report += `- Commits: ${commits.length}\n`;
+            report += `- Files changed: ${allFiles.length}\n`;
+            report += `- Relevant candidate commits: ${relevantCommits.length}\n`;
+            report += `- Likely skipped commits: ${skippedCommits.length}\n`;
+            report += `- Needs human review: ${reviewCommits.length}\n\n`;
+
+            report += "## Relevant candidates\n\n";
+            report += bulletList(relevantCommits.map((commit) => `\`${commit.shortSha}\` ${commit.subject} (${commit.date}) — ${commit.buckets.relevant.join(", ")}`), "None detected");
+            report += "\n## Likely skipped by lean-fork policy\n\n";
+            report += bulletList(skippedCommits.map((commit) => `\`${commit.shortSha}\` ${commit.subject} (${commit.date}) — ${commit.buckets.skipped.join(", ")}`), "None detected");
+            report += "\n## Needs human review\n\n";
+            report += bulletList(reviewCommits.map((commit) => `\`${commit.shortSha}\` ${commit.subject} (${commit.date}) — ${commit.files.join(", ") || "no file list"}`), "None detected");
+            report += "\n## Changed files\n\n";
+            report += bulletList(allFiles.map((file) => `\`${file}\``), "None detected");
+            report += "\n## Conflict hotspots\n\n";
+            report += bulletList(conflictHotspots.map((file) => `\`${file}\``), "None detected");
+            report += "\n## Manual update flow\n\n";
+            report += "```bash\n";
+            report += "git remote add upstream https://github.com/nicobailon/pi-web-access.git || true\n";
+            report += "git fetch upstream --tags\n";
+            report += `git checkout -b chore/import-upstream-${generatedAt.slice(0, 10)}\n`;
+            report += "git cherry-pick -n <sha>\n";
+            report += "npm ci\n";
+            report += "npm test\n";
+            report += "npm run typecheck\n";
+            report += "```\n\n";
+            report += "After human review/import, update `.github/upstream-sync.json` `lastReviewedSha` to the upstream head above.\n\n";
+          }
+
+          report += "## Lean-fork guardrails\n\n";
+          report += "- Do not auto-merge upstream.\n";
+          report += "- Do not auto-cherry-pick into the default branch.\n";
+          report += "- Do not restore curator, Gemini, video, browser-cookie, or stored-content features unless intentionally reapproved.\n";
+          report += "- Do not update dependencies/lockfiles unless the selected upstream fix requires it.\n";
+          report += "- Pure report generation does not run npm verification; run `npm ci`, `npm test`, and `npm run typecheck` on manual import branches.\n";
+
+          fs.writeFileSync(reportPath, report);
+          NODE
+
+          {
+            echo "has_changes=${has_changes}"
+            echo "upstream_sha=${upstream_sha}"
+            echo "report_path=${report_path}"
+          } >> "${GITHUB_OUTPUT}"
+
+          cat "${report_path}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Open or update tracking issue
+        if: steps.sync.outputs.has_changes == 'true' && env.CREATE_ISSUE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh label create "${ISSUE_LABEL}" \
+            --description "Reports upstream pi-web-access changes for lean-fork review" \
+            --color "5319e7" \
+            --force
+
+          issue_number="$(gh issue list \
+            --state open \
+            --label "${ISSUE_LABEL}" \
+            --json number,title \
+            --limit 100 \
+            --jq ".[] | select(.title == \"${ISSUE_TITLE}\") | .number" \
+            | head -n 1)"
+
+          if [[ -n "${issue_number}" ]]; then
+            gh issue edit "${issue_number}" \
+              --body-file "${{ steps.sync.outputs.report_path }}" \
+              --add-label "${ISSUE_LABEL}"
+          else
+            gh issue create \
+              --title "${ISSUE_TITLE}" \
+              --label "${ISSUE_LABEL}" \
+              --body-file "${{ steps.sync.outputs.report_path }}"
+          fi
+
+      - name: Upload sync report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-sync-report
+          path: ${{ steps.sync.outputs.report_path }}
+          if-no-files-found: error
