@@ -1,0 +1,10 @@
+[tools]
+node = "24.16.0"
+
+[tasks.typecheck]
+description = "Run TypeScript type checks"
+run = "npm run typecheck"
+
+[tasks.test]
+description = "Run Node test suite"
+run = "npm test"
