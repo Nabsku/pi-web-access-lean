@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isPerplexityAvailable, searchWithPerplexity, type SearchResponse, type SearchOptions } from "./perplexity.js";
-import { hasExaApiKey, isExaAvailable, searchWithExa } from "./exa.js";
+import { isPerplexityAvailable, searchWithPerplexity, type SearchResponse, type SearchOptions } from "./perplexity.ts";
+import { hasExaApiKey, isExaAvailable, searchWithExa } from "./exa.ts";
 
 export type SearchProvider = "auto" | "perplexity" | "exa";
 export type ResolvedSearchProvider = Exclude<SearchProvider, "auto">;
