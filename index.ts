@@ -1,10 +1,11 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
-import { fetchAllContent } from "./extract.js";
-import { search, type SearchProvider } from "./search.js";
-import { executeCodeSearch } from "./code-search.js";
-import type { SearchResult } from "./perplexity.js";
+import { Type } from "typebox";
+import { StringEnum } from "@earendil-works/pi-ai/compat";
+import { fetchAllContent } from "./extract.ts";
+import { search, type SearchProvider } from "./search.ts";
+import { executeCodeSearch } from "./code-search.ts";
+import type { SearchResult } from "./perplexity.ts";
 
 const MAX_INLINE_CONTENT = 30000;
 

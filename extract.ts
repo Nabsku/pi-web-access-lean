@@ -2,10 +2,10 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 import pLimit from "p-limit";
-import { activityMonitor } from "./activity.js";
-import { extractRSCContent } from "./rsc-extract.js";
-import { extractPDFToMarkdown, isPDF } from "./pdf-extract.js";
-import { extractGitHub } from "./github-extract.js";
+import { activityMonitor } from "./activity.ts";
+import { extractRSCContent } from "./rsc-extract.ts";
+import { extractPDFToMarkdown, isPDF } from "./pdf-extract.ts";
+import { extractGitHub } from "./github-extract.ts";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const CONCURRENT_LIMIT = 3;
