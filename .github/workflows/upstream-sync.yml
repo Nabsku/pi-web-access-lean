@@ -215,6 +215,7 @@ jobs:
         if: steps.sync.outputs.has_changes == 'true' && env.CREATE_ISSUE == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
