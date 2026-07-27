@@ -1,7 +1,7 @@
 {
   "upstream": "https://github.com/nicobailon/pi-web-access",
   "defaultRef": "main",
-  "lastReviewedSha": "7bdc30a65cf77273eb9c0034647b373bda4060d7",
-  "lastReviewedAt": "2026-07-06T10:29:10.886Z",
+  "lastReviewedSha": "58ce1566b5959552cf9e8b9f227b158b199a4975",
+  "lastReviewedAt": "2026-07-27T20:16:33Z",
   "policy": "report-only; humans review upstream changes and cherry-pick relevant hunks"
 }

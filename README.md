@@ -120,6 +120,14 @@ Environment variables take precedence where supported:
 - `EXA_API_KEY`
 - `PERPLEXITY_API_KEY`
 
+`exaApiKey` and `perplexityApiKey` also accept Pi-style credential sources. Use
+`$NAME` or `${NAME}` to read a named environment variable, prefix a trusted
+local command with `!` to resolve it at request time, or escape a literal
+leading marker as `$$` / `$!`. Resolver commands run with a five-second timeout,
+a 16 KiB output limit, and a minimized environment; `OP_SESSION_*` variables are
+forwarded for shell-local 1Password sessions. Command text, stderr, and resolved
+credentials are not included in provider errors.
+
 ## Tools
 
 ### `web_search`

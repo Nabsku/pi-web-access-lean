@@ -50,7 +50,9 @@ function isAbortError(err: unknown): boolean {
 }
 
 export async function search(query: string, options: FullSearchOptions = {}): Promise<AttributedSearchResponse> {
-	const provider = options.provider ?? getSearchConfig().searchProvider;
+	const provider = options.provider && options.provider !== "auto"
+		? options.provider
+		: getSearchConfig().searchProvider;
 
 	if (provider === "perplexity") {
 		const result = await searchWithPerplexity(query, options);
