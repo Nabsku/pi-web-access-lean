@@ -5,7 +5,6 @@
  * Uses unpdf (pdfjs-dist wrapper) for text extraction.
  */
 
-import { getDocumentProxy } from "unpdf";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
@@ -26,6 +25,20 @@ export interface PDFExtractOptions {
 const DEFAULT_MAX_PAGES = 100;
 const DEFAULT_OUTPUT_DIR = join(homedir(), "Downloads");
 
+async function getUnpdf() {
+  if (typeof (Promise as PromiseConstructor & { try?: unknown }).try !== "function") {
+    const { default: promiseTry } = await import("promise.try");
+    promiseTry.shim();
+  }
+
+  const [unpdf, pdfjs] = await Promise.all([
+    import("unpdf"),
+    import("unpdf/pdfjs"),
+  ]);
+  const { VerbosityLevel } = pdfjs as typeof pdfjs & { VerbosityLevel: { ERRORS: number } };
+  return { getDocumentProxy: unpdf.getDocumentProxy, VerbosityLevel };
+}
+
 /**
  * Extract text from a PDF buffer and save to markdown file
  */
@@ -44,7 +57,10 @@ export async function extractPDFToMarkdown(
     ? Math.max(1, Math.floor(maxPages))
     : DEFAULT_MAX_PAGES;
 
-  const pdf = await getDocumentProxy(new Uint8Array(buffer));
+  const { getDocumentProxy, VerbosityLevel } = await getUnpdf();
+  const pdf = await getDocumentProxy(new Uint8Array(buffer), {
+    verbosity: VerbosityLevel.ERRORS,
+  });
   const metadata = await pdf.getMetadata();
   const metadataInfo = metadata.info && typeof metadata.info === "object"
     ? metadata.info as Record<string, unknown>

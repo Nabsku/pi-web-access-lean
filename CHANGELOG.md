@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Ported relevant upstream v0.14 fixes while preserving the lean tool surface: lazy content extraction, answer-only search rendering, runtime-bundled TypeBox, quieter Node 22 PDF extraction, configured-provider precedence, and request-time Exa/Perplexity credential sources.
+
 ### Changed
 - Lean fork keeps the coding-agent daily path: `web_search`, `code_search`, `fetch_content`, GitHub repository extraction, PDF extraction, HTML/Readability extraction, RSC extraction, and the activity widget.
 - Renamed the search router from `gemini-search.ts` to `search.ts` because Gemini providers are no longer part of this fork.

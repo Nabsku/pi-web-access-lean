@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "typecheck": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --allowImportingTsExtensions --skipLibCheck index.ts"
+    "typecheck": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --allowImportingTsExtensions --skipLibCheck index.ts promise-try.d.ts"
   },
   "keywords": [
     "pi-package",
@@ -25,7 +25,9 @@
     "@mozilla/readability": "^0.6.0",
     "linkedom": "^0.18.12",
     "p-limit": "^7.3.0",
+    "promise.try": "^2.0.1",
     "turndown": "^7.2.0",
+    "typebox": "^1.3.4",
     "unpdf": "^1.6.2"
   },
   "devDependencies": {
@@ -45,7 +47,6 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+    "@earendil-works/pi-tui": "*"
   }
 }

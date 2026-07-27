@@ -1,13 +1,26 @@
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai/compat";
-import { fetchAllContent } from "./extract.ts";
+import type { ExtractedContent, ExtractOptions } from "./extract.ts";
 import { search, type SearchProvider } from "./search.ts";
 import { executeCodeSearch } from "./code-search.ts";
 import type { SearchResult } from "./perplexity.ts";
+import { activityMonitor, type ActivityEntry } from "./activity.ts";
 
 const MAX_INLINE_CONTENT = 30000;
+let widgetVisible = false;
+let widgetUnsubscribe: (() => void) | null = null;
+
+let extractModulePromise: Promise<typeof import("./extract.ts")> | undefined;
+async function fetchAllContent(
+	urls: string[],
+	signal?: AbortSignal,
+	options?: ExtractOptions,
+): Promise<ExtractedContent[]> {
+	const extractModule = await (extractModulePromise ??= import("./extract.ts"));
+	return extractModule.fetchAllContent(urls, signal, options);
+}
 
 type QueryResultData = {
 	query: string;
@@ -48,9 +61,26 @@ function normalizeQueryList(queryList: unknown[]): string[] {
 }
 
 function formatSearchSummary(results: SearchResult[], answer: string): string {
+	if (results.length === 0) {
+		return answer ? `${answer}\n\n---\n\nSources:\nNo sources returned.` : "No results found.";
+	}
 	let output = answer ? `${answer}\n\n---\n\nSources:\n` : "Sources:\n";
 	output += results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}`).join("\n\n");
 	return output;
+}
+
+function formatActivityEntry(entry: ActivityEntry): string {
+	const target = entry.type === "api" ? entry.query : entry.url?.replace(/^https?:\/\//, "");
+	const status = entry.error ? "error" : entry.status === null ? "…" : entry.status === 0 ? "abort" : String(entry.status);
+	return `${entry.type === "api" ? "API" : "GET"} ${(target || "").slice(0, 42)} ${status}`;
+}
+
+function updateActivityWidget(ctx: ExtensionContext): void {
+	const theme = ctx.ui.theme;
+	const entries = activityMonitor.getEntries();
+	const lines = [theme.fg("accent", "── Web Search Activity ──")];
+	lines.push(...(entries.length ? entries.map((entry) => `  ${formatActivityEntry(entry)}`) : [theme.fg("muted", "  No activity yet")]));
+	ctx.ui.setWidget("web-activity", lines);
 }
 
 function duplicateQuerySet(results: QueryResultData[]): Set<string> {
@@ -106,6 +136,21 @@ function buildSearchReturn(args: {
 }
 
 export default function webAccessLean(pi: ExtensionAPI) {
+	pi.registerShortcut("ctrl+shift+w", {
+		description: "Toggle web search activity",
+		handler: async (ctx) => {
+			widgetVisible = !widgetVisible;
+			if (widgetVisible) {
+				widgetUnsubscribe = activityMonitor.onUpdate(() => updateActivityWidget(ctx));
+				updateActivityWidget(ctx);
+			} else {
+				widgetUnsubscribe?.();
+				widgetUnsubscribe = null;
+				ctx.ui.setWidget("web-activity", undefined);
+			}
+		},
+	});
+
 	pi.registerTool({
 		name: "web_search",
 		label: "Web Search",

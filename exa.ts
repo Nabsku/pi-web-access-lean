@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
 import type { SearchOptions, SearchResponse } from "./perplexity.ts";
+import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
 const EXA_ANSWER_URL = "https://api.exa.ai/answer";
 const EXA_SEARCH_URL = "https://api.exa.ai/search";
@@ -79,14 +80,13 @@ function loadConfig(): WebSearchConfig {
 	}
 }
 
-function normalizeApiKey(value: unknown): string | null {
-	if (typeof value !== "string") return null;
-	const normalized = value.trim();
-	return normalized.length > 0 ? normalized : null;
-}
-
-function getApiKey(): string | null {
-	return normalizeApiKey(process.env.EXA_API_KEY) ?? normalizeApiKey(loadConfig().exaApiKey);
+async function getApiKey(signal?: AbortSignal): Promise<string | null> {
+	return resolveCredential({
+		provider: "Exa",
+		configuredValue: loadConfig().exaApiKey,
+		environmentValue: process.env.EXA_API_KEY,
+		signal,
+	});
 }
 
 function getCurrentMonth(): string {
@@ -414,7 +414,7 @@ async function searchWithExaMcp(query: string, options: ExaSearchOptions = {}): 
 }
 
 export function isExaAvailable(): boolean {
-	if (getApiKey()) {
+	if (hasExaApiKey()) {
 		const usage = readUsage();
 		return usage.count < MONTHLY_LIMIT;
 	}
@@ -422,11 +422,15 @@ export function isExaAvailable(): boolean {
 }
 
 export function hasExaApiKey(): boolean {
-	return !!getApiKey();
+	return hasCredentialSource({
+		provider: "Exa",
+		configuredValue: loadConfig().exaApiKey,
+		environmentValue: process.env.EXA_API_KEY,
+	});
 }
 
 export async function searchWithExa(query: string, options: ExaSearchOptions = {}): Promise<ExaSearchResult> {
-	const apiKey = getApiKey();
+	const apiKey = await getApiKey(options.signal);
 	if (!apiKey) {
 		return searchWithExaMcp(query, options);
 	}
@@ -457,7 +461,7 @@ export async function searchWithExa(query: string, options: ExaSearchOptions = {
 			});
 
 			if (!response.ok) {
-				const errorText = await response.text();
+				const errorText = redactCredential(await response.text(), apiKey);
 				throw new Error(`Exa API error ${response.status}: ${errorText.slice(0, 300)}`);
 			}
 
@@ -492,7 +496,7 @@ export async function searchWithExa(query: string, options: ExaSearchOptions = {
 		});
 
 		if (!response.ok) {
-			const errorText = await response.text();
+			const errorText = redactCredential(await response.text(), apiKey);
 			throw new Error(`Exa API error ${response.status}: ${errorText.slice(0, 300)}`);
 		}
 
@@ -510,11 +514,13 @@ export async function searchWithExa(query: string, options: ExaSearchOptions = {
 		return mapped;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		if (message.toLowerCase().includes("abort")) {
+		const redactedMessage = redactCredential(message, apiKey);
+		if (redactedMessage.toLowerCase().includes("abort")) {
 			activityMonitor.logComplete(activityId, 0);
 		} else {
-			activityMonitor.logError(activityId, message);
+			activityMonitor.logError(activityId, redactedMessage);
 		}
-		throw err;
+		if (redactedMessage === message) throw err;
+		throw new Error(redactedMessage);
 	}
 }

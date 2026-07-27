@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
+import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions";
 const CONFIG_PATH = join(homedir(), ".pi", "web-search.json");
@@ -56,15 +57,13 @@ function loadConfig(): WebSearchConfig {
 	}
 }
 
-function normalizeApiKey(value: unknown): string | null {
-	if (typeof value !== "string") return null;
-	const normalized = value.trim();
-	return normalized.length > 0 ? normalized : null;
-}
-
-function getApiKey(): string {
-	const config = loadConfig();
-	const key = normalizeApiKey(process.env.PERPLEXITY_API_KEY) ?? normalizeApiKey(config.perplexityApiKey);
+async function getApiKey(signal?: AbortSignal): Promise<string> {
+	const key = await resolveCredential({
+		provider: "Perplexity",
+		configuredValue: loadConfig().perplexityApiKey,
+		environmentValue: process.env.PERPLEXITY_API_KEY,
+		signal,
+	});
 	if (!key) {
 		throw new Error(
 			"Perplexity API key not found. Either:\n" +
@@ -100,8 +99,11 @@ function validateDomainFilter(domains: string[]): string[] {
 }
 
 export function isPerplexityAvailable(): boolean {
-	const config = loadConfig();
-	return !!(normalizeApiKey(process.env.PERPLEXITY_API_KEY) ?? normalizeApiKey(config.perplexityApiKey));
+	return hasCredentialSource({
+		provider: "Perplexity",
+		configuredValue: loadConfig().perplexityApiKey,
+		environmentValue: process.env.PERPLEXITY_API_KEY,
+	});
 }
 
 export async function searchWithPerplexity(query: string, options: SearchOptions = {}): Promise<SearchResponse> {
@@ -116,8 +118,10 @@ export async function searchWithPerplexity(query: string, options: SearchOptions
 		windowMs: RATE_LIMIT.windowMs,
 	});
 
-	const apiKey = getApiKey();
-	const numResults = Math.min(options.numResults ?? 5, 20);
+	const apiKey = await getApiKey(options.signal);
+	const numResults = typeof options.numResults === "number" && Number.isFinite(options.numResults)
+		? Math.max(1, Math.min(Math.floor(options.numResults), 20))
+		: 5;
 
 	const requestBody: Record<string, unknown> = {
 		model: "sonar",
@@ -146,7 +150,7 @@ export async function searchWithPerplexity(query: string, options: SearchOptions
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify(requestBody),
-			signal: options.signal,
+			...(options.signal ? { signal: options.signal } : {}),
 		});
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
@@ -160,7 +164,7 @@ export async function searchWithPerplexity(query: string, options: SearchOptions
 
 	if (!response.ok) {
 		activityMonitor.logComplete(activityId, response.status);
-		const errorText = await response.text();
+		const errorText = redactCredential(await response.text(), apiKey);
 		throw new Error(`Perplexity API error ${response.status}: ${errorText}`);
 	}
 
