@@ -216,9 +216,13 @@ Toggle with **Ctrl+Shift+W** to see live request/response activity:
 ## Development
 
 ```bash
-npm install
+npm ci
 npm test
+npm run typecheck
 ```
+
+GitHub Actions runs these checks on Node 22 and Ubuntu for ready pull requests
+and pushes to `main`. Draft pull requests skip the validation job.
 
 ## Files
 
