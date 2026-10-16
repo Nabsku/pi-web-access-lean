@@ -2,9 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isPerplexityAvailable, searchWithPerplexity, type SearchResponse, type SearchOptions } from "./perplexity.ts";
-import { hasExaApiKey, isExaAvailable, searchWithExa } from "./exa.ts";
+import { isExaAvailable, searchWithExa } from "./exa.ts";
 import { CredentialResolutionError } from "./credential-source.ts";
-import { parseConfigRoot } from "./utils.ts";
+import { isAbortError, parseConfigRoot } from "./utils.ts";
 
 export type SearchProvider = "auto" | "perplexity" | "exa";
 export type ResolvedSearchProvider = Exclude<SearchProvider, "auto">;
@@ -47,38 +47,39 @@ function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
-function isAbortError(err: unknown): boolean {
-	return errorMessage(err).toLowerCase().includes("abort");
-}
-
 export async function search(query: string, options: FullSearchOptions = {}): Promise<AttributedSearchResponse> {
+	options.signal?.throwIfAborted();
 	const provider = options.provider && options.provider !== "auto"
 		? options.provider
 		: getSearchConfig().searchProvider;
 
 	if (provider === "perplexity") {
 		const result = await searchWithPerplexity(query, options);
+		options.signal?.throwIfAborted();
 		return { ...result, provider: "perplexity" };
 	}
 
 	if (provider === "exa") {
-		const exaApiKeyConfigured = hasExaApiKey();
-		try {
-			const result = await searchWithExa(query, options);
-			if (result) return { ...result, provider: "exa" };
-			if (exaApiKeyConfigured) throw new Error("Exa search returned no results.");
-		} catch (err) {
-			if (isAbortError(err) || exaApiKeyConfigured) throw err;
-		}
+		const result = await searchWithExa(query, options);
+		options.signal?.throwIfAborted();
+		if (result) return { ...result, provider: "exa" };
+		throw new Error("Exa search returned no results.");
 	}
 
 	const fallbackErrors: string[] = [];
+	let firstEmpty: AttributedSearchResponse | undefined;
 
-	if (provider !== "exa" && isExaAvailable()) {
+	if (isExaAvailable()) {
 		try {
 			const result = await searchWithExa(query, options);
-			if (result) return { ...result, provider: "exa" };
+			options.signal?.throwIfAborted();
+			if (result) {
+				const response: AttributedSearchResponse = { ...result, provider: "exa" };
+				if (result.answer.trim() || result.results.length) return response;
+				firstEmpty = response;
+			}
 		} catch (err) {
+			options.signal?.throwIfAborted();
 			if (err instanceof CredentialResolutionError || isAbortError(err)) throw err;
 			fallbackErrors.push(`Exa: ${errorMessage(err)}`);
 		}
@@ -87,12 +88,18 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 	if (isPerplexityAvailable()) {
 		try {
 			const result = await searchWithPerplexity(query, options);
-			return { ...result, provider: "perplexity" };
+			options.signal?.throwIfAborted();
+			const response: AttributedSearchResponse = { ...result, provider: "perplexity" };
+			if (result.answer.trim() || result.results.length) return response;
+			firstEmpty ??= response;
 		} catch (err) {
+			options.signal?.throwIfAborted();
 			if (isAbortError(err)) throw err;
 			fallbackErrors.push(`Perplexity: ${errorMessage(err)}`);
 		}
 	}
+
+	if (firstEmpty) return firstEmpty;
 
 	if (fallbackErrors.length > 0) {
 		throw new Error(`Auto provider search failed:\n  - ${fallbackErrors.join("\n  - ")}`);

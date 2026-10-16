@@ -7,6 +7,7 @@ import { search, type SearchProvider } from "./search.ts";
 import { executeCodeSearch } from "./code-search.ts";
 import type { SearchResult } from "./perplexity.ts";
 import { activityMonitor, type ActivityEntry } from "./activity.ts";
+import { isAbortError } from "./utils.ts";
 
 const MAX_INLINE_CONTENT = 30000;
 let widgetVisible = false;
@@ -204,6 +205,7 @@ export default function webAccessLean(pi: ExtensionAPI) {
 			const recencyFilter = normalizeRecencyFilter(params.recencyFilter);
 
 			for (let i = 0; i < queryList.length; i++) {
+				signal?.throwIfAborted();
 				const query = queryList[i];
 				onUpdate?.({ content: [{ type: "text", text: `Searching ${i + 1}/${queryList.length}: ${query}` }], details: { phase: "search", progress: i / queryList.length } });
 				try {
@@ -215,10 +217,12 @@ export default function webAccessLean(pi: ExtensionAPI) {
 						includeContent: params.includeContent,
 						signal,
 					});
+					signal?.throwIfAborted();
 					searchResults.push({ query, answer, results, error: null, provider: usedProvider });
 					for (const r of results) if (!allUrls.includes(r.url)) allUrls.push(r.url);
 					if (inlineContent) allInlineContent.push(...inlineContent);
 				} catch (err) {
+					if (signal?.aborted || isAbortError(err)) throw err;
 					searchResults.push({ query, answer: "", results: [], error: err instanceof Error ? err.message : String(err), provider });
 				}
 			}

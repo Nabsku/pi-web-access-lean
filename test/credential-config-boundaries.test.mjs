@@ -54,7 +54,7 @@ process.stdout.write(Buffer.from("config fixture file").toString("base64"));
 						(await load("index")).default({ on() {}, registerShortcut() {}, registerTool(tool) { tools.push(tool); } });
 						return tools.find(tool => tool.name === "web_search").execute("fixture", params);
 					}
-					const response = () => new Response(JSON.stringify({ results: [], citations: [], choices: [{ message: { content: "Perplexity fixture" } }] }));
+					const response = () => new Response(JSON.stringify({ results: [{ title: "Exa fixture", url: "https://example.com/exa", highlights: ["Exa fixture"] }], citations: [], choices: [{ message: { content: "Perplexity fixture" } }] }));
 					${script}
 				`,
 			});
@@ -133,19 +133,27 @@ test("Perplexity transport errors redact credentials from errors, stacks, activi
 				let error;
 				try { await (await load("perplexity")).searchWithPerplexity("fixture"); }
 				catch (err) { error = { ...failure(err), same: err === original }; }
-				const tool = await webSearch({ query: "fixture", provider: "perplexity" });
-				console.log(JSON.stringify({ error, tool, entries: activityMonitor.getEntries(), calls }));
+				let tool, toolError;
+				try { tool = await webSearch({ query: "fixture", provider: "perplexity" }); }
+				catch (err) { toolError = failure(err); }
+				console.log(JSON.stringify({ error, tool, toolError, entries: activityMonitor.getEntries(), calls }));
 			`);
 			assert.ok(result.error);
 			assert.equal(result.transcript.includes("synthetic-perplexity-transport-secret"), false, "secret escaped through an observable error surface");
 			assert.deepEqual(result.calls, ["api.perplexity.ai", "api.perplexity.ai"]);
-			assert.equal(result.tool.details.successfulQueries, 0);
+			if (kind === "AbortError") {
+				assert.equal(result.tool, undefined, "cancellation must reject the batch, not return a successful tool result");
+				assert.equal(result.toolError.name, "AbortError");
+			} else {
+				assert.equal(result.toolError, undefined);
+				assert.equal(result.tool.details.successfulQueries, 0);
+			}
 			if (kind === "clean-error") {
 				assert.equal(result.error.same, true, "unmodified errors retain their identity");
 				assert.equal(result.error.message, "ordinary failure");
 			} else {
 				assert.match(result.error.message, /\[redacted\]/);
-				assert.match(result.tool.content[0].text, /\[redacted\]/);
+				assert.match(kind === "AbortError" ? result.toolError.message : result.tool.content[0].text, /\[redacted\]/);
 				const expectedNames = { TypeError: "TypeError", AbortError: "AbortError", "native-header": "TypeError" };
 				assert.equal(result.error.name, expectedNames[kind] ?? "Error");
 			}
