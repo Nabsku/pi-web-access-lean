@@ -2,6 +2,7 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 import pLimit from "p-limit";
+import { MIMEType } from "node:util";
 import { activityMonitor } from "./activity.ts";
 import { extractRSCContent } from "./rsc-extract.ts";
 import { extractPDFToMarkdown, isPDF } from "./pdf-extract.ts";
@@ -118,6 +119,66 @@ function isLikelyJSRendered(html: string): boolean {
 	return textContent.length < 500 && scriptCount > 3;
 }
 
+async function rejectOversizedBody(
+	body: { cancel(): Promise<void> } | null,
+	maxBytes: number,
+	observedBytes: number,
+	source: "Content-Length" | "received",
+): Promise<never> {
+	const message = `Response too large (configured body limit: ${maxBytes} bytes; ${source}: ${observedBytes} bytes). Fetch a smaller document or download it directly.`;
+	try {
+		await body?.cancel();
+	} catch (cause) {
+		throw new Error(`${message} Body cancellation failed.`, { cause });
+	}
+	throw new Error(message);
+}
+
+async function readResponseBufferWithLimit(response: Response, maxBytes: number): Promise<ArrayBuffer> {
+	const reader = response.body?.getReader();
+	if (!reader) return new ArrayBuffer(0);
+
+	const chunks: Uint8Array[] = [];
+	let totalBytes = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			totalBytes += value.byteLength;
+			if (totalBytes > maxBytes) await rejectOversizedBody(reader, maxBytes, totalBytes, "received");
+			chunks.push(value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+
+	const combined = new Uint8Array(totalBytes);
+	let offset = 0;
+	for (const chunk of chunks) {
+		combined.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return combined.buffer;
+}
+
+function decodeResponseText(buffer: ArrayBuffer, contentType: string): string {
+	let charset: string | null = null;
+	try {
+		charset = new MIMEType(contentType).params.get("charset");
+	} catch (err) {
+		if (!(err instanceof TypeError)) throw err;
+		// A missing or malformed media type has no usable charset declaration.
+	}
+	let decoder: TextDecoder;
+	try {
+		decoder = new TextDecoder(charset || "utf-8");
+	} catch (err) {
+		if (!(err instanceof RangeError)) throw err;
+		decoder = new TextDecoder("utf-8");
+	}
+	return decoder.decode(buffer);
+}
+
 async function extractViaHttp(
 	url: string,
 	signal?: AbortSignal,
@@ -165,19 +226,13 @@ async function extractViaHttp(
 		if (contentLengthHeader) {
 			const contentLength = parseInt(contentLengthHeader, 10);
 			if (contentLength > maxResponseSize) {
-				activityMonitor.logComplete(activityId, response.status);
-				return {
-					url,
-					title: "",
-					content: "",
-					error: `Response too large (${Math.round(contentLength / 1024 / 1024)}MB)`,
-				};
+				await rejectOversizedBody(response.body, maxResponseSize, contentLength, "Content-Length");
 			}
 		}
 
 		if (isPDFContent) {
+			const buffer = await readResponseBufferWithLimit(response, maxResponseSize);
 			try {
-				const buffer = await response.arrayBuffer();
 				const result = await extractPDFToMarkdown(buffer, url);
 				activityMonitor.logComplete(activityId, response.status);
 				return {
@@ -207,7 +262,8 @@ async function extractViaHttp(
 			};
 		}
 
-		const text = await response.text();
+		const buffer = await readResponseBufferWithLimit(response, maxResponseSize);
+		const text = decodeResponseText(buffer, contentType);
 		const isHTML = contentType.includes("text/html") || contentType.includes("application/xhtml+xml");
 
 		if (!isHTML) {
