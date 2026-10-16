@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, rmSync, statSync, readdirSync, openSync, readSync, closeSync, realpathSync, mkdirSync, lstatSync, unlinkSync } from "node:fs";
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve as resolvePath, sep as pathSep } from "node:path";
@@ -205,24 +205,77 @@ function removeCloneDestination(destination: CloneDestination): boolean {
 	}
 }
 
-function execClone(args: string[], destination: CloneDestination, timeoutMs: number, signal?: AbortSignal): Promise<string | null> {
-	const { localPath } = destination;
-	return new Promise((resolve) => {
-		const child = execFile(args[0], args.slice(1), { timeout: timeoutMs }, (err) => {
-			if (err) {
-				removeCloneDestination(destination);
-				resolve(null);
-				return;
-			}
-			resolve(localPath);
-		});
+// Cooperative fixture trees exited within 19 ms; allow headroom before forcing resistant helpers.
+const PROCESS_KILL_GRACE_MS = 250;
 
-		if (signal) {
-			const onAbort = () => child.kill();
-			signal.addEventListener("abort", onAbort, { once: true });
-			child.on("exit", () => signal.removeEventListener("abort", onAbort));
+async function terminateProcessTree(child: ChildProcess): Promise<void> {
+	const pid = child.pid;
+	if (!pid) return;
+	if (process.platform === "win32") {
+		await new Promise<void>((resolve, reject) => {
+			execFile("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true }, (err) => {
+				if (err) {
+					child.kill("SIGKILL");
+					reject(err);
+				} else resolve();
+			});
+		});
+		return;
+	}
+
+	const killGroup = (signal: NodeJS.Signals) => {
+		try {
+			process.kill(-pid, signal);
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
 		}
-	});
+	};
+	killGroup("SIGTERM");
+	// Keep the grace timer referenced and awaited even if the root exits before its helpers.
+	await new Promise<void>((resolve) => setTimeout(resolve, PROCESS_KILL_GRACE_MS));
+	killGroup("SIGKILL");
+}
+
+async function execClone(args: string[], destination: CloneDestination, timeoutMs: number, signal?: AbortSignal): Promise<string | null> {
+	if (signal?.aborted) return null;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	let onAbort: (() => void) | undefined;
+	try {
+		const success = await new Promise<boolean>((resolve, reject) => {
+			let settled = false;
+			let termination: Promise<void> | undefined;
+			const finish = (success: boolean) => {
+				if (settled) return;
+				settled = true;
+				if (termination) termination.then(() => resolve(false), reject);
+				else resolve(success);
+			};
+			const child = spawn(args[0], args.slice(1), {
+				detached: process.platform !== "win32",
+				env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", GCM_INTERACTIVE: "Never", GH_PROMPT_DISABLED: "1" },
+				stdio: "ignore",
+				windowsHide: true,
+			});
+			child.once("error", () => finish(false));
+			child.once("close", (code) => finish(code === 0));
+			onAbort = () => {
+				if (settled || termination) return;
+				termination = terminateProcessTree(child);
+				termination.catch(reject);
+			};
+			timeout = setTimeout(onAbort, timeoutMs);
+			if (signal?.aborted) onAbort();
+			else signal?.addEventListener("abort", onAbort, { once: true });
+		});
+		if (!success) {
+			removeCloneDestination(destination);
+			return null;
+		}
+		return destination.localPath;
+	} finally {
+		if (timeout) clearTimeout(timeout);
+		if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+	}
 }
 
 async function cloneRepo(
@@ -630,7 +683,11 @@ export async function extractGitHub(
 	const clonePromise = cloneRepo(owner, repo, info.ref, config, destination, signal);
 	cloneCache.set(key, { destination, clonePromise });
 
-	const result = await clonePromise;
+	const result = await clonePromise.catch((err) => {
+		cloneCache.delete(key);
+		activityMonitor.logError(activityId, "clone process failed");
+		throw err;
+	});
 	if (signal?.aborted) {
 		if (!result) cloneCache.delete(key);
 		activityMonitor.logComplete(activityId, 0);
