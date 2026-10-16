@@ -6,11 +6,12 @@ import { activityMonitor } from "./activity.ts";
 import { extractRSCContent } from "./rsc-extract.ts";
 import { extractPDFToMarkdown, isPDF } from "./pdf-extract.ts";
 import { extractGitHub } from "./github-extract.ts";
+import { fetchRemoteUrl } from "./ssrf-protection.ts";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const CONCURRENT_LIMIT = 3;
 
-const NON_RECOVERABLE_ERRORS = ["Unsupported content type", "Response too large"];
+const NON_RECOVERABLE_ERRORS = ["Unsupported content type", "Response too large", "Blocked fetch target"];
 const MIN_USEFUL_CONTENT = 500;
 
 function errorMessage(err: unknown): string {
@@ -58,7 +59,10 @@ export async function extractContent(
 	}
 
 	try {
-		new URL(url);
+		const parsed = new URL(url);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+			return { url, title: "", content: "", error: "Only HTTP and HTTPS URLs can be fetched" };
+		}
 	} catch {
 		return { url, title: "", content: "", error: "Invalid URL" };
 	}
@@ -129,7 +133,7 @@ async function extractViaHttp(
 	signal?.addEventListener("abort", onAbort);
 
 	try {
-		const response = await fetch(url, {
+		const response = await fetchRemoteUrl(url, {
 			signal: controller.signal,
 			headers: {
 				"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
