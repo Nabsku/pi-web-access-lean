@@ -1,3 +1,11 @@
+export function parseConfigRoot(raw: string): Record<string, unknown> {
+	const parsed: unknown = JSON.parse(raw);
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new Error("expected a JSON object");
+	}
+	return parsed as Record<string, unknown>;
+}
+
 export function formatSeconds(s: number): string {
 	const h = Math.floor(s / 3600);
 	const m = Math.floor((s % 3600) / 60);

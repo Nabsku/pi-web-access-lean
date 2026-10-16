@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { isPerplexityAvailable, searchWithPerplexity, type SearchResponse, type SearchOptions } from "./perplexity.ts";
 import { hasExaApiKey, isExaAvailable, searchWithExa } from "./exa.ts";
+import { CredentialResolutionError } from "./credential-source.ts";
+import { parseConfigRoot } from "./utils.ts";
 
 export type SearchProvider = "auto" | "perplexity" | "exa";
 export type ResolvedSearchProvider = Exclude<SearchProvider, "auto">;
@@ -22,7 +24,7 @@ function getSearchConfig(): { searchProvider: SearchProvider } {
 	}
 
 	try {
-		const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8")) as { searchProvider?: unknown; provider?: unknown };
+		const raw = parseConfigRoot(readFileSync(CONFIG_PATH, "utf-8"));
 		cachedSearchConfig = { searchProvider: normalizeSearchProvider(raw.searchProvider ?? raw.provider) };
 		return cachedSearchConfig;
 	} catch (err) {
@@ -80,7 +82,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 			const result = await searchWithExa(query, options);
 			if (result && "answer" in result) return { ...result, provider: "exa" };
 		} catch (err) {
-			if (isAbortError(err)) throw err;
+			if (err instanceof CredentialResolutionError || isAbortError(err)) throw err;
 			fallbackErrors.push(`Exa: ${errorMessage(err)}`);
 		}
 	}

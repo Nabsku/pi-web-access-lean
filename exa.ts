@@ -5,6 +5,7 @@ import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
 import type { SearchOptions, SearchResponse } from "./perplexity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { parseConfigRoot } from "./utils.ts";
 
 const EXA_ANSWER_URL = "https://api.exa.ai/answer";
 const EXA_SEARCH_URL = "https://api.exa.ai/search";
@@ -72,7 +73,7 @@ function loadConfig(): WebSearchConfig {
 
 	const raw = readFileSync(CONFIG_PATH, "utf-8");
 	try {
-		cachedConfig = JSON.parse(raw) as WebSearchConfig;
+		cachedConfig = parseConfigRoot(raw) as WebSearchConfig;
 		return cachedConfig;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);

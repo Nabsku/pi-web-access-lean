@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
+import { parseConfigRoot } from "./utils.ts";
 
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions";
 const CONFIG_PATH = join(homedir(), ".pi", "web-search.json");
@@ -49,7 +50,7 @@ function loadConfig(): WebSearchConfig {
 
 	const content = readFileSync(CONFIG_PATH, "utf-8");
 	try {
-		cachedConfig = JSON.parse(content) as WebSearchConfig;
+		cachedConfig = parseConfigRoot(content) as WebSearchConfig;
 		return cachedConfig;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
@@ -154,12 +155,16 @@ export async function searchWithPerplexity(query: string, options: SearchOptions
 		});
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		if (message.toLowerCase().includes("abort")) {
+		const redactedMessage = redactCredential(message, apiKey);
+		if (redactedMessage.toLowerCase().includes("abort")) {
 			activityMonitor.logComplete(activityId, 0);
 		} else {
-			activityMonitor.logError(activityId, message);
+			activityMonitor.logError(activityId, redactedMessage);
 		}
-		throw err;
+		if (redactedMessage === message) throw err;
+		const redactedError = new Error(redactedMessage);
+		if (err instanceof Error) redactedError.name = err.name;
+		throw redactedError;
 	}
 
 	if (!response.ok) {
