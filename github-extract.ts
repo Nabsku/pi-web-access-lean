@@ -7,6 +7,7 @@ import { basename, dirname, extname, join, resolve as resolvePath, sep as pathSe
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
 import { checkGhAvailable, checkRepoSize, fetchViaApi, showGhHint } from "./github-api.ts";
+import { parseConfigRoot } from "./utils.ts";
 
 const CONFIG_PATH = join(homedir(), ".pi", "web-search.json");
 
@@ -113,7 +114,7 @@ function loadGitHubConfig(): GitHubCloneConfig {
 	const rawText = readFileSync(CONFIG_PATH, "utf-8");
 	let raw: { githubClone?: { enabled?: unknown; maxRepoSizeMB?: unknown; cloneTimeoutSeconds?: unknown; clonePath?: unknown } };
 	try {
-		raw = JSON.parse(rawText) as { githubClone?: { enabled?: unknown; maxRepoSizeMB?: unknown; cloneTimeoutSeconds?: unknown; clonePath?: unknown } };
+		raw = parseConfigRoot(rawText) as typeof raw;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		throw new Error(`Failed to parse ${CONFIG_PATH}: ${message}`);
