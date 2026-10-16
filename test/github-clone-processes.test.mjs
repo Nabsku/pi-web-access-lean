@@ -100,7 +100,7 @@ if (args[0] === "api") {
 	return;
 }
 const destination = tool === "gh" && args[0] === "repo" && args[1] === "clone" ? args[3] : tool === "git" && args[0] === "clone" ? args.at(-1) : null;
-if (!destination || path.dirname(destination) !== path.join(root, "cache")) throw new Error("Unsafe process-fixture destination");
+if (!destination || !path.resolve(destination).startsWith(path.join(root, "cache") + path.sep)) throw new Error("Unsafe process-fixture destination");
 fs.mkdirSync(destination, { recursive: true });
 fs.writeFileSync(path.join(destination, "README.md"), "process fixture");
 const mode = process.env.GITHUB_PROCESS_MODE;
@@ -181,7 +181,7 @@ for (const route of ["gh", "git"]) {
 			const result = await extractGitHub(url, controller.signal, true);
 			const cloned = result?.content.includes("process fixture") === true;
 			const listeners = getEventListeners(controller.signal, "abort").length;
-			clearCloneCache();
+			await clearCloneCache();
 			console.log(JSON.stringify({ cloned, listeners, requestAt, completedAt: Date.now() }));
 		`);
 		assert.equal(result.cloned, true);
