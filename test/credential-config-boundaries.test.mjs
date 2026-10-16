@@ -54,7 +54,7 @@ process.stdout.write(Buffer.from("config fixture file").toString("base64"));
 						(await load("index")).default({ on() {}, registerShortcut() {}, registerTool(tool) { tools.push(tool); } });
 						return tools.find(tool => tool.name === "web_search").execute("fixture", params);
 					}
-					const response = () => new Response(JSON.stringify({ answer: "Exa fixture", citations: [], choices: [{ message: { content: "Perplexity fixture" } }] }));
+					const response = () => new Response(JSON.stringify({ results: [], citations: [], choices: [{ message: { content: "Perplexity fixture" } }] }));
 					${script}
 				`,
 			});

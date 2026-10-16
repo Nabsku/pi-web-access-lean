@@ -49,7 +49,7 @@ async function fixture(t, legacy, config = { exaApiKey: key, perplexityApiKey: "
 					const calls = [];
 					globalThis.fetch = async (url, init) => {
 						calls.push({ url: String(url), keyMatches: new Headers(init.headers).get("x-api-key") === key });
-						return new Response(JSON.stringify({ answer: "Exa account fixture", citations: [{ title: "Fixture", url: "https://example.com/source" }], choices: [{ message: { content: "Perplexity fallback fixture" } }] }));
+						return new Response(JSON.stringify({ results: [{ title: "Fixture", url: "https://example.com/source", highlights: ["Exa account fixture"] }], choices: [{ message: { content: "Perplexity fallback fixture" } }] }));
 					};
 					async function attempt(run) { try { return { value: await run() }; } catch (error) { return { error: { name: error.name, message: error.message, stack: error.stack } }; } }
 					const exa = await load("exa");
@@ -86,14 +86,14 @@ test("keyed Exa ignores legacy usage artifacts without modifying or creating the
 		`);
 		t.diagnostic(JSON.stringify({ evidence: "isolated process/filesystem; mocked provider I/O", name, available: result.available, directError: result.direct.error, namedError: result.named.error, autoProvider: result.auto.value?.provider, urls: result.calls.map(call => call.url) }));
 		assert.equal(result.direct.error, undefined);
-		assert.equal(result.direct.value?.answer, "Exa account fixture");
+		assert.equal(result.direct.value?.answer, "Exa account fixture\nSource: Fixture (https://example.com/source)");
 		assert.deepEqual(result.direct.value.results, [{ title: "Fixture", url: "https://example.com/source", snippet: "" }]);
 		assert.deepEqual(result.available, { value: true });
 		assert.equal(result.named.value?.provider, "exa");
 		assert.equal(result.auto.value?.provider, "exa");
 		assert.equal(result.tool.details.successfulQueries, 1);
 		assert.match(result.tool.content[0].text, /Exa account fixture/);
-		assert.deepEqual(result.calls, Array.from({ length: 4 }, () => ({ url: "https://api.exa.ai/answer", keyMatches: true })));
+		assert.deepEqual(result.calls, Array.from({ length: 4 }, () => ({ url: "https://api.exa.ai/search", keyMatches: true })));
 		assert.doesNotMatch(result.transcript, /Exa usage warning|monthly free tier exhausted/);
 		assert.deepEqual(await f.snapshot(), f.before, "legacy files, symlink targets and missing journals must remain untouched");
 	});
@@ -104,20 +104,20 @@ test("keyed search payloads, inline content and request-time credentials survive
 	const result = f.run(`
 		globalThis.fetch = async (url, init) => {
 			calls.push({ url: String(url), body: JSON.parse(init.body), keyMatches: new Headers(init.headers).get("x-api-key") === process.env.SCOPED_EXA_KEY });
-			return new Response(JSON.stringify({ answer: "refreshed answer", citations: [], results: [{ title: "Fixture", url: "https://example.com/source", text: "inline fixture" }] }));
+			return new Response(JSON.stringify({ results: [{ title: "Fixture", url: "https://example.com/source", text: "inline fixture" }] }));
 		};
 		const found = await exa.searchWithExa("search fixture", { includeContent: true, numResults: 2, domainFilter: ["example.com"] });
 		process.env.SCOPED_EXA_KEY = "synthetic-refreshed-key";
-		const refreshed = await exa.searchWithExa("answer fixture");
+		const refreshed = await exa.searchWithExa("refreshed fixture");
 		console.log(JSON.stringify({ found, refreshed, calls }));
 	`, { SCOPED_EXA_KEY: key });
 	assert.deepEqual(result.calls, [
 		{ url: "https://api.exa.ai/search", keyMatches: true, body: { query: "search fixture", type: "auto", numResults: 2, includeDomains: ["example.com"], contents: { text: true, highlights: true } } },
-		{ url: "https://api.exa.ai/answer", keyMatches: true, body: { query: "answer fixture", text: true } },
+		{ url: "https://api.exa.ai/search", keyMatches: true, body: { query: "refreshed fixture", type: "auto", numResults: 5, contents: { highlights: true } } },
 	]);
 	assert.match(result.found.answer, /inline fixture/);
 	assert.deepEqual(result.found.inlineContent, [{ url: "https://example.com/source", title: "Fixture", content: "inline fixture", error: null }]);
-	assert.equal(result.refreshed.answer, "refreshed answer");
+	assert.equal(result.refreshed.answer, "inline fixture\nSource: Fixture (https://example.com/source)");
 	assert.deepEqual(await f.snapshot(), f.before);
 });
 
@@ -131,7 +131,7 @@ test("remote account/authentication errors still reject explicit Exa requests an
 			const { activityMonitor } = await load("activity");
 			console.log(JSON.stringify({ direct, named, entries: activityMonitor.getEntries(), calls }));
 		`);
-		assert.deepEqual(result.calls, ["https://api.exa.ai/answer", "https://api.exa.ai/answer"]);
+		assert.deepEqual(result.calls, ["https://api.exa.ai/search", "https://api.exa.ai/search"]);
 		for (const attempt of [result.direct, result.named]) assert.match(attempt.error.message, new RegExp(`Exa API error ${status}: remote account rejection \\[redacted\\]`));
 		assert.equal(result.transcript.includes(key), false);
 		assert.ok(result.entries.every(entry => entry.endTime !== undefined));
@@ -186,6 +186,6 @@ test("keyless web and code search keep using Exa MCP with an untouched malformed
 	assert.deepEqual(result.web.results, [{ title: "Fixture", url: "https://example.com/source", snippet: "" }]);
 	assert.equal(result.code.details.mode, "code-context");
 	assert.equal(result.code.content[0].text, "MCP code fixture");
-	assert.deepEqual(result.calls, ["web_search_exa", "get_code_context_exa"].map(name => ({ url: "https://mcp.exa.ai/mcp", name, hasKey: false })));
+	assert.deepEqual(result.calls, ["web_search_exa", "get_code_context_exa"].map(name => ({ url: "https://mcp.exa.ai/mcp?tools=" + name, name, hasKey: false })));
 	assert.deepEqual(await f.snapshot(), f.before);
 });
