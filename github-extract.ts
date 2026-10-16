@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, rmSync, statSync, readdirSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, readdirSync, openSync, readSync, closeSync, realpathSync, mkdirSync, lstatSync, unlinkSync } from "node:fs";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { extname, join, resolve as resolvePath, sep as pathSep } from "node:path";
+import { basename, dirname, extname, join, resolve as resolvePath, sep as pathSep } from "node:path";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
 import { checkGhAvailable, checkRepoSize, fetchViaApi, showGhHint } from "./github-api.ts";
@@ -39,8 +40,13 @@ export interface GitHubUrlInfo {
 }
 
 interface CachedClone {
-	localPath: string;
+	destination: CloneDestination;
 	clonePromise: Promise<string | null>;
+}
+
+interface CloneDestination {
+	rootPath: string;
+	localPath: string;
 }
 
 interface GitHubCloneConfig {
@@ -123,20 +129,20 @@ export function parseGitHubUrl(url: string): GitHubUrlInfo | null {
 	const host = parsed.hostname.toLowerCase();
 	if (host !== "github.com" && host !== "www.github.com") return null;
 
-	const segments = parsed.pathname
-		.split("/")
-		.filter(Boolean)
-		.map((segment) => {
-			try {
-				return decodeURIComponent(segment);
-			} catch {
-				return segment;
-			}
-		});
+	const segments: string[] = [];
+	for (const segment of parsed.pathname.split("/").filter(Boolean)) {
+		try {
+			segments.push(decodeURIComponent(segment));
+		} catch {
+			return null;
+		}
+	}
 	if (segments.length < 2) return null;
 
 	const owner = segments[0];
 	const repo = segments[1].replace(/\.git$/, "");
+	if (!owner || /[^A-Za-z0-9-]|^-|-$|--/.test(owner)) return null;
+	if (!repo || /[^A-Za-z0-9._-]/.test(repo) || repo === "." || repo === "..") return null;
 
 	if (NON_CODE_SEGMENTS.has(segments[2]?.toLowerCase())) return null;
 
@@ -149,6 +155,7 @@ export function parseGitHubUrl(url: string): GitHubUrlInfo | null {
 	if (segments.length < 4) return null;
 
 	const ref = segments[3];
+	if (/[\0-\x1f\x7f]/.test(ref)) return null;
 	const refIsFullSha = /^[0-9a-f]{40}$/.test(ref);
 	const pathParts = segments.slice(4);
 	const path = pathParts.length > 0 ? pathParts.join("/") : "";
@@ -167,19 +174,43 @@ function cacheKey(owner: string, repo: string, ref?: string): string {
 	return ref ? `${owner}/${repo}@${ref}` : `${owner}/${repo}`;
 }
 
-function cloneDir(config: GitHubCloneConfig, owner: string, repo: string, ref?: string): string {
-	const dirName = ref ? `${repo}@${ref}` : repo;
-	return join(config.clonePath, owner, dirName);
+function cloneDestination(config: GitHubCloneConfig, owner: string, repo: string, ref?: string): CloneDestination | null {
+	const configuredRoot = resolvePath(config.clonePath);
+	let rootPath: string;
+	try {
+		mkdirSync(configuredRoot, { recursive: true });
+		rootPath = realpathSync(configuredRoot);
+	} catch {
+		return null;
+	}
+	const digest = createHash("sha256").update(JSON.stringify([owner, repo, ref ?? null])).digest("hex");
+	return { rootPath, localPath: join(rootPath, digest) };
 }
 
-function execClone(args: string[], localPath: string, timeoutMs: number, signal?: AbortSignal): Promise<string | null> {
+function removeCloneDestination(destination: CloneDestination): boolean {
+	const rootPath = resolvePath(destination.rootPath);
+	const localPath = resolvePath(destination.localPath);
+	if (dirname(localPath) !== rootPath || !/^[0-9a-f]{64}$/.test(basename(localPath))) {
+		throw new Error("Invalid clone-cache destination");
+	}
+	try {
+		// A cache root replaced after cloning must not redirect destructive cleanup.
+		if (realpathSync(rootPath) !== rootPath) return false;
+		const entry = lstatSync(localPath);
+		if (entry.isSymbolicLink()) unlinkSync(localPath);
+		else rmSync(localPath, { recursive: true, force: true });
+		return true;
+	} catch (err) {
+		return !!err && typeof err === "object" && "code" in err && err.code === "ENOENT";
+	}
+}
+
+function execClone(args: string[], destination: CloneDestination, timeoutMs: number, signal?: AbortSignal): Promise<string | null> {
+	const { localPath } = destination;
 	return new Promise((resolve) => {
 		const child = execFile(args[0], args.slice(1), { timeout: timeoutMs }, (err) => {
 			if (err) {
-				try {
-					rmSync(localPath, { recursive: true, force: true });
-				} catch {
-				}
+				removeCloneDestination(destination);
 				resolve(null);
 				return;
 			}
@@ -199,14 +230,11 @@ async function cloneRepo(
 	repo: string,
 	ref: string | undefined,
 	config: GitHubCloneConfig,
+	destination: CloneDestination,
 	signal?: AbortSignal,
 ): Promise<string | null> {
-	const localPath = cloneDir(config, owner, repo, ref);
-
-	try {
-		rmSync(localPath, { recursive: true, force: true });
-	} catch {
-	}
+	const { localPath } = destination;
+	if (!removeCloneDestination(destination)) return null;
 
 	const timeoutMs = config.cloneTimeoutSeconds * 1000;
 	const hasGh = await checkGhAvailable();
@@ -214,7 +242,7 @@ async function cloneRepo(
 	if (hasGh) {
 		const args = ["gh", "repo", "clone", `${owner}/${repo}`, localPath, "--", "--depth", "1", "--single-branch"];
 		if (ref) args.push("--branch", ref);
-		return execClone(args, localPath, timeoutMs, signal);
+		return execClone(args, destination, timeoutMs, signal);
 	}
 
 	showGhHint();
@@ -223,7 +251,7 @@ async function cloneRepo(
 	const args = ["git", "clone", "--depth", "1", "--single-branch"];
 	if (ref) args.push("--branch", ref);
 	args.push(gitUrl, localPath);
-	return execClone(args, localPath, timeoutMs, signal);
+	return execClone(args, destination, timeoutMs, signal);
 }
 
 function isBinaryFile(filePath: string): boolean {
@@ -588,9 +616,19 @@ export async function extractGitHub(
 		return cachedResult;
 	}
 
-	const clonePromise = cloneRepo(owner, repo, info.ref, config, signal);
-	const localPath = cloneDir(config, owner, repo, info.ref);
-	cloneCache.set(key, { localPath, clonePromise });
+	const destination = cloneDestination(config, owner, repo, info.ref);
+	if (!destination) {
+		const apiFallback = await fetchViaApi(url, owner, repo, info);
+		if (signal?.aborted) {
+			activityMonitor.logComplete(activityId, 0);
+			return null;
+		}
+		if (apiFallback) activityMonitor.logComplete(activityId, 200);
+		else activityMonitor.logError(activityId, "invalid clone destination");
+		return apiFallback;
+	}
+	const clonePromise = cloneRepo(owner, repo, info.ref, config, destination, signal);
+	cloneCache.set(key, { destination, clonePromise });
 
 	const result = await clonePromise;
 	if (signal?.aborted) {
@@ -624,10 +662,7 @@ export async function extractGitHub(
 
 export function clearCloneCache(): void {
 	for (const entry of cloneCache.values()) {
-		try {
-			rmSync(entry.localPath, { recursive: true, force: true });
-		} catch {
-		}
+		removeCloneDestination(entry.destination);
 	}
 	cloneCache.clear();
 	cachedConfig = null;
