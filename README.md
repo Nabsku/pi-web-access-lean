@@ -128,6 +128,9 @@ a 16 KiB output limit, and a minimized environment; `OP_SESSION_*` variables are
 forwarded for shell-local 1Password sessions. Command text, stderr, and resolved
 credentials are not included in provider errors.
 
+Configured Exa API keys use Exa's account limits directly. Any legacy
+`~/.pi/exa-usage.json` file is ignored and left untouched.
+
 ## Tools
 
 ### `web_search`

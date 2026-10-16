@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { activityMonitor } from "./activity.ts";
@@ -11,18 +11,9 @@ const EXA_ANSWER_URL = "https://api.exa.ai/answer";
 const EXA_SEARCH_URL = "https://api.exa.ai/search";
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 const CONFIG_PATH = join(homedir(), ".pi", "web-search.json");
-const USAGE_PATH = join(homedir(), ".pi", "exa-usage.json");
-
-const MONTHLY_LIMIT = 1000;
-const WARNING_THRESHOLD = 800;
 
 interface WebSearchConfig {
 	exaApiKey?: unknown;
-}
-
-interface ExaUsage {
-	month: string;
-	count: number;
 }
 
 interface ExaAnswerResponse {
@@ -53,7 +44,7 @@ interface ExaMcpRpcResponse {
 	};
 }
 
-export type ExaSearchResult = SearchResponse | { exhausted: true } | null;
+export type ExaSearchResult = SearchResponse | null;
 
 export interface ExaSearchOptions extends SearchOptions {
 	includeContent?: boolean;
@@ -62,7 +53,6 @@ export interface ExaSearchOptions extends SearchOptions {
 type McpParsedResult = { title: string; url: string; content: string };
 
 let cachedConfig: WebSearchConfig | null = null;
-let warnedMonth: string | null = null;
 
 function loadConfig(): WebSearchConfig {
 	if (cachedConfig) return cachedConfig;
@@ -88,54 +78,6 @@ async function getApiKey(signal?: AbortSignal): Promise<string | null> {
 		environmentValue: process.env.EXA_API_KEY,
 		signal,
 	});
-}
-
-function getCurrentMonth(): string {
-	return new Date().toISOString().slice(0, 7);
-}
-
-function normalizeUsage(raw: unknown): ExaUsage {
-	const month = getCurrentMonth();
-	if (!raw || typeof raw !== "object") return { month, count: 0 };
-	const data = raw as { month?: unknown; count?: unknown };
-	const parsedMonth = typeof data.month === "string" ? data.month : month;
-	const parsedCount = typeof data.count === "number" && Number.isFinite(data.count) ? data.count : 0;
-	if (parsedMonth !== month) return { month, count: 0 };
-	return { month: parsedMonth, count: Math.max(0, Math.floor(parsedCount)) };
-}
-
-function readUsage(): ExaUsage {
-	if (!existsSync(USAGE_PATH)) return { month: getCurrentMonth(), count: 0 };
-	const raw = readFileSync(USAGE_PATH, "utf-8");
-	try {
-		return normalizeUsage(JSON.parse(raw));
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to parse ${USAGE_PATH}: ${message}`);
-	}
-}
-
-function writeUsage(usage: ExaUsage): void {
-	const dir = join(homedir(), ".pi");
-	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-	writeFileSync(USAGE_PATH, JSON.stringify(usage, null, 2) + "\n");
-}
-
-function reserveRequestBudget(): { exhausted: true } | null {
-	const usage = readUsage();
-
-	if (usage.count >= MONTHLY_LIMIT) {
-		return { exhausted: true };
-	}
-
-	const nextCount = usage.count + 1;
-	if (nextCount >= WARNING_THRESHOLD && warnedMonth !== usage.month) {
-		warnedMonth = usage.month;
-		console.error(`Exa usage warning: ${nextCount}/${MONTHLY_LIMIT} monthly requests used.`);
-	}
-
-	writeUsage({ month: usage.month, count: nextCount });
-	return null;
 }
 
 function requestSignal(signal?: AbortSignal): AbortSignal {
@@ -415,10 +357,6 @@ async function searchWithExaMcp(query: string, options: ExaSearchOptions = {}): 
 }
 
 export function isExaAvailable(): boolean {
-	if (hasExaApiKey()) {
-		const usage = readUsage();
-		return usage.count < MONTHLY_LIMIT;
-	}
 	return true;
 }
 
@@ -435,9 +373,6 @@ export async function searchWithExa(query: string, options: ExaSearchOptions = {
 	if (!apiKey) {
 		return searchWithExaMcp(query, options);
 	}
-
-	const budget = reserveRequestBudget();
-	if (budget) return budget;
 
 	const useSearch = options.includeContent
 		|| !!options.recencyFilter
