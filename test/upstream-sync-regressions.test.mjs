@@ -22,6 +22,7 @@ test("explicit auto honors the configured provider", () => {
 test("activity widget uses the supported string-array API", async () => {
 	const shortcuts = [];
 	initializeExtension({
+		on() {},
 		registerTool() {},
 		registerShortcut(name, shortcut) { shortcuts.push({ name, shortcut }); },
 	});

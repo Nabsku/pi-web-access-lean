@@ -223,7 +223,7 @@ test("normal clone/ref/API paths and cache cleanup preserve unrelated files", { 
 		const distinctRefs = new Set(paths).size === paths.length;
 		rmSync(paths[0], { recursive: true });
 		symlinkSync(outside, paths[0], "dir");
-		clearCloneCache();
+		await clearCloneCache();
 		console.log(JSON.stringify({
 			cached: clonePath(first) === clonePath(again), allContained, distinctRefs,
 			rootContent: first.content.includes("clone fixture"), blobContent: blob.content.includes("export const fixture = true;"),
@@ -245,7 +245,7 @@ test("git fallback cloning also stays inside the configured cache", { skip: proc
 		const result = await extractGitHub("https://github.com/owner/repo/tree/feature%2Fbranch/src", undefined, true);
 		const path = clonePath(result);
 		const inside = contained(path);
-		clearCloneCache();
+		await clearCloneCache();
 		console.log(JSON.stringify({ error: result?.error, contained: inside, removed: !existsSync(path), siblingPreserved: existsSync(join(cache, "keep.txt")) }));
 	`);
 	assert.equal(observed.error, null);
@@ -332,7 +332,7 @@ test("cache cleanup refuses a root replaced by an outside-directory symlink", { 
 		mkdirSync(replacement, { recursive: true });
 		writeFileSync(join(replacement, "marker.txt"), "preserve replacement");
 		symlinkSync(outside, cache, "dir");
-		clearCloneCache();
+		await clearCloneCache();
 		console.log(JSON.stringify({ replacementPreserved: existsSync(join(replacement, "marker.txt")), outsidePreserved: existsSync(join(outside, "marker.txt")) }));
 	`);
 	assert.equal(observed.replacementPreserved, true);

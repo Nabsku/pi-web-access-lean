@@ -13,14 +13,6 @@ let widgetVisible = false;
 let widgetUnsubscribe: (() => void) | null = null;
 
 let extractModulePromise: Promise<typeof import("./extract.ts")> | undefined;
-async function fetchAllContent(
-	urls: string[],
-	signal?: AbortSignal,
-	options?: ExtractOptions,
-): Promise<ExtractedContent[]> {
-	const extractModule = await (extractModulePromise ??= import("./extract.ts"));
-	return extractModule.fetchAllContent(urls, signal, options);
-}
 
 type QueryResultData = {
 	query: string;
@@ -136,6 +128,37 @@ function buildSearchReturn(args: {
 }
 
 export default function webAccessLean(pi: ExtensionAPI) {
+	const newSession = () => ({ controller: new AbortController(), clones: undefined as ReturnType<typeof import("./extract.ts").createGitHubCloneSession> | undefined });
+	let session = newSession();
+
+	async function endSession(): Promise<void> {
+		const previous = session;
+		previous.controller.abort();
+		if (previous.clones) {
+			const extractModule = await extractModulePromise!;
+			await extractModule.disposeGitHubCloneSession(previous.clones);
+		}
+	}
+
+	pi.on("session_start", async () => {
+		await endSession();
+		session = newSession();
+	});
+	pi.on("session_shutdown", endSession);
+
+	async function fetchAllContent(urls: string[], signal?: AbortSignal, options?: ExtractOptions): Promise<ExtractedContent[]> {
+		const current = session;
+		const operationSignal = signal ? AbortSignal.any([signal, current.controller.signal]) : current.controller.signal;
+		if (!operationSignal.aborted) {
+			const extractModule = await (extractModulePromise ??= import("./extract.ts"));
+			if (!operationSignal.aborted) {
+				current.clones ??= extractModule.createGitHubCloneSession();
+				return extractModule.fetchAllContent(urls, operationSignal, options, current.clones);
+			}
+		}
+		return urls.map((url) => ({ url, title: "", content: "", error: "Aborted" }));
+	}
+
 	pi.registerShortcut("ctrl+shift+w", {
 		description: "Toggle web search activity",
 		handler: async (ctx) => {

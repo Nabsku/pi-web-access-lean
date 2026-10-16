@@ -184,6 +184,16 @@ Parameters:
 - `url` / `urls`: single URL/path or multiple URLs
 - `forceClone`: clone GitHub repositories that exceed the size threshold
 
+GitHub clones use private per-session directories inside `githubClone.clonePath`.
+Requests in the same session reuse a repository/ref checkout, and `/tree` keeps it.
+Closing or replacing the session (new, resume, fork, or reload) removes only its own
+clones. Paths in old transcripts can expire; call `fetch_content` again to refresh them.
+
+Crash cleanup removes a stale runtime only when its local boot identity matches and
+its owner PID is absent. Unknown, live, legacy, and symlink entries are preserved.
+On platforms without reliable boot identity, including Windows, stale runtimes need
+manual cleanup after verifying they are unused.
+
 ## Extraction flow
 
 ```text

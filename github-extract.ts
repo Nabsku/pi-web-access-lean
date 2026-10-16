@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, rmSync, statSync, readdirSync, openSync, readSync, closeSync, realpathSync, mkdirSync, lstatSync, unlinkSync } from "node:fs";
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { existsSync, readFileSync, rmSync, statSync, readdirSync, openSync, readSync, closeSync, realpathSync, mkdirSync, lstatSync, unlinkSync, mkdtempSync, chmodSync, writeFileSync, readlinkSync, constants as fsConstants } from "node:fs";
+import { lstat, open, opendir, realpath, rm } from "node:fs/promises";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { basename, dirname, extname, join, resolve as resolvePath, sep as pathSep } from "node:path";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
@@ -49,6 +50,25 @@ interface CloneDestination {
 	localPath: string;
 }
 
+interface CloneRuntime {
+	parentPath: string;
+	rootPath: string;
+	dev: number;
+	ino: number;
+}
+
+export interface GitHubCloneSession {
+	cache: Map<string, CachedClone>;
+	controller: AbortController;
+	runtime: CloneRuntime | null;
+	sweep?: Promise<void>;
+	disposal?: Promise<void>;
+}
+
+export function createGitHubCloneSession(): GitHubCloneSession {
+	return { cache: new Map(), controller: new AbortController(), runtime: null };
+}
+
 interface GitHubCloneConfig {
 	enabled: boolean;
 	maxRepoSizeMB: number;
@@ -56,7 +76,7 @@ interface GitHubCloneConfig {
 	clonePath: string;
 }
 
-const cloneCache = new Map<string, CachedClone>();
+let defaultCloneSession = createGitHubCloneSession();
 
 let cachedConfig: GitHubCloneConfig | null = null;
 
@@ -174,17 +194,149 @@ function cacheKey(owner: string, repo: string, ref?: string): string {
 	return ref ? `${owner}/${repo}@${ref}` : `${owner}/${repo}`;
 }
 
-function cloneDestination(config: GitHubCloneConfig, owner: string, repo: string, ref?: string): CloneDestination | null {
-	const configuredRoot = resolvePath(config.clonePath);
-	let rootPath: string;
-	try {
-		mkdirSync(configuredRoot, { recursive: true });
-		rootPath = realpathSync(configuredRoot);
-	} catch {
-		return null;
+interface CloneRuntimeOwner {
+	version: 1;
+	pid: number;
+	platform: NodeJS.Platform;
+	hostname: string;
+	bootId?: string;
+	pidNamespace?: string;
+}
+
+function currentRuntimeOwner(): CloneRuntimeOwner {
+	const owner: CloneRuntimeOwner = { version: 1, pid: process.pid, platform: process.platform, hostname: hostname() };
+	if (process.platform === "linux") {
+		try {
+			owner.bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+			owner.pidNamespace = readlinkSync("/proc/self/ns/pid");
+		} catch (err) {
+			if (!expectedCleanupError(err)) throw err;
+			// Without the local boot/namespace identity, Linux ownership stays unknown.
+		}
+	} else if (process.platform === "darwin") {
+		try {
+			owner.bootId = execFileSync("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+		} catch (err) {
+			if (!expectedCleanupError(err) && (err as { status?: number }).status === undefined) throw err;
+			console.error("[pi-web-access] Local boot identity unavailable; stale clone runtimes will be preserved.");
+		}
 	}
+	return owner;
+}
+
+function expectedCleanupError(err: unknown): boolean {
+	return ["ENOENT", "ENOTDIR", "EACCES", "EPERM", "ELOOP"].includes((err as NodeJS.ErrnoException)?.code ?? "");
+}
+
+function cloneRuntimeIsOwned(runtime: CloneRuntime): boolean {
+	const { parentPath, rootPath, dev, ino } = runtime;
+	if (dirname(rootPath) !== parentPath || !basename(rootPath).startsWith("runtime-")) throw new Error("Invalid clone runtime");
+	if (realpathSync(parentPath) !== parentPath || realpathSync(rootPath) !== rootPath) return false;
+	const entry = lstatSync(rootPath);
+	return entry.isDirectory() && !entry.isSymbolicLink() && entry.dev === dev && entry.ino === ino;
+}
+
+function removeCloneRuntime(runtime: CloneRuntime): void {
+	try {
+		if (cloneRuntimeIsOwned(runtime)) rmSync(runtime.rootPath, { recursive: true, force: true });
+	} catch (err) {
+		if (!expectedCleanupError(err)) throw err;
+	}
+}
+
+async function sweepStaleCloneRuntimes(parentPath: string, local: CloneRuntimeOwner): Promise<void> {
+	if (!local.bootId || (process.platform === "linux" && !local.pidNamespace)) return;
+	// The read budget is the emitted v1 local envelope with the largest Node/OS PID,
+	// not an age/count policy. A different host, namespace or schema is not ours to prune.
+	const maxBytes = Buffer.byteLength(JSON.stringify({ ...local, pid: 0x7fffffff }));
+	const oversized = (observed: number) => console.error(`[pi-web-access] Clone owner metadata read budget exceeded (configured: ${maxBytes} bytes; observed: ${observed} bytes). Preserving unknown runtime; inspect it manually. Recompute the v1 envelope budget if its schema changes.`);
+	let directory: Awaited<ReturnType<typeof opendir>>;
+	try { directory = await opendir(parentPath); }
+	catch (err) { if (expectedCleanupError(err)) return; throw err; }
+	for await (const candidate of directory) {
+		if (!candidate.name.startsWith("runtime-") || !candidate.isDirectory() || candidate.isSymbolicLink()) continue;
+		const rootPath = join(parentPath, candidate.name);
+		try {
+			if (await realpath(parentPath) !== parentPath || await realpath(rootPath) !== rootPath) continue;
+			const entry = await lstat(rootPath);
+			if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+			const ownerPath = join(rootPath, ".owner.json");
+			const metadata = await lstat(ownerPath);
+			if (!metadata.isFile() || metadata.isSymbolicLink()) continue;
+			if (metadata.size > maxBytes) { oversized(metadata.size); continue; }
+			const file = await open(ownerPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+			let owner: unknown;
+			try {
+				const opened = await file.stat();
+				if (!opened.isFile() || opened.dev !== metadata.dev || opened.ino !== metadata.ino) continue;
+				if (opened.size > maxBytes) { oversized(opened.size); continue; }
+				const buffer = Buffer.alloc(maxBytes + 1);
+				let bytes = 0;
+				while (bytes < buffer.length) {
+					const { bytesRead } = await file.read(buffer, bytes, buffer.length - bytes, bytes);
+					if (!bytesRead) break;
+					bytes += bytesRead;
+				}
+				if (bytes > maxBytes) { oversized(bytes); continue; }
+				try { owner = JSON.parse(buffer.toString("utf8", 0, bytes)); }
+				catch (err) { if (err instanceof SyntaxError) continue; throw err; }
+			} finally {
+				await file.close();
+			}
+			if (!owner || typeof owner !== "object" || Array.isArray(owner)) continue;
+			const record = owner as Record<string, unknown>;
+			if (record.version !== local.version || record.platform !== local.platform || record.hostname !== local.hostname
+				|| !Number.isInteger(record.pid) || (record.pid as number) <= 0 || (record.pid as number) > 0x7fffffff
+				|| record.bootId !== local.bootId || record.pidNamespace !== local.pidNamespace
+				|| Object.keys(record).some((key) => !Object.hasOwn(local, key))) continue;
+			let dead = false;
+			try { process.kill(record.pid as number, 0); }
+			catch (err) {
+				if ((err as NodeJS.ErrnoException).code === "ESRCH") dead = true;
+				else if (!expectedCleanupError(err)) throw err;
+			}
+			// A reused PID is conservatively live; no age or name can prove death.
+			const runtime = { parentPath, rootPath, dev: entry.dev, ino: entry.ino };
+			if (dead && cloneRuntimeIsOwned(runtime)) await rm(rootPath, { recursive: true, force: true });
+		} catch (err) {
+			if (!expectedCleanupError(err)) throw err;
+		}
+	}
+}
+
+function cloneDestination(config: GitHubCloneConfig, session: GitHubCloneSession, owner: string, repo: string, ref?: string): CloneDestination | null {
+	if (!session.runtime) {
+		let runtime: CloneRuntime | undefined;
+		try {
+			const configuredRoot = resolvePath(config.clonePath);
+			mkdirSync(configuredRoot, { recursive: true });
+			const parentPath = realpathSync(configuredRoot);
+			const rootPath = mkdtempSync(join(parentPath, "runtime-"));
+			const entry = lstatSync(rootPath);
+			runtime = { parentPath, rootPath, dev: entry.dev, ino: entry.ino };
+			chmodSync(rootPath, 0o700);
+			const owner = currentRuntimeOwner();
+			writeFileSync(join(rootPath, ".owner.json"), JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+			session.runtime = runtime;
+			session.sweep ??= sweepStaleCloneRuntimes(parentPath, owner);
+			session.sweep.catch((err) => {
+				console.error(`[pi-web-access] Stale clone cleanup failed (${(err as NodeJS.ErrnoException)?.code ?? "unexpected error"}); unknown runtimes were preserved.`);
+			});
+		} catch (err) {
+			if (runtime) removeCloneRuntime(runtime);
+			if (!err || typeof err !== "object" || !("code" in err)) throw err;
+			return null;
+		}
+	}
+	const { rootPath } = session.runtime;
 	const digest = createHash("sha256").update(JSON.stringify([owner, repo, ref ?? null])).digest("hex");
 	return { rootPath, localPath: join(rootPath, digest) };
+}
+
+function releaseEmptyRuntime(session: GitHubCloneSession): void {
+	if (session.cache.size || !session.runtime) return;
+	removeCloneRuntime(session.runtime);
+	session.runtime = null;
 }
 
 function removeCloneDestination(destination: CloneDestination): boolean {
@@ -599,7 +751,10 @@ export async function extractGitHub(
 	url: string,
 	signal?: AbortSignal,
 	forceClone?: boolean,
+	session = defaultCloneSession,
 ): Promise<ExtractedContent | null> {
+	signal = signal ? AbortSignal.any([signal, session.controller.signal]) : session.controller.signal;
+	const cloneCache = session.cache;
 	const info = parseGitHubUrl(url);
 	if (!info) return null;
 
@@ -669,7 +824,7 @@ export async function extractGitHub(
 		return cachedResult;
 	}
 
-	const destination = cloneDestination(config, owner, repo, info.ref);
+	const destination = cloneDestination(config, session, owner, repo, info.ref);
 	if (!destination) {
 		const apiFallback = await fetchViaApi(url, owner, repo, info);
 		if (signal?.aborted) {
@@ -685,17 +840,22 @@ export async function extractGitHub(
 
 	const result = await clonePromise.catch((err) => {
 		cloneCache.delete(key);
+		releaseEmptyRuntime(session);
 		activityMonitor.logError(activityId, "clone process failed");
 		throw err;
 	});
 	if (signal?.aborted) {
-		if (!result) cloneCache.delete(key);
+		if (!result) {
+			cloneCache.delete(key);
+			releaseEmptyRuntime(session);
+		}
 		activityMonitor.logComplete(activityId, 0);
 		return null;
 	}
 
 	if (!result) {
 		cloneCache.delete(key);
+		releaseEmptyRuntime(session);
 		if (signal?.aborted) {
 			activityMonitor.logComplete(activityId, 0);
 			return null;
@@ -717,10 +877,23 @@ export async function extractGitHub(
 	return { url, title, content, error: null };
 }
 
-export function clearCloneCache(): void {
-	for (const entry of cloneCache.values()) {
-		removeCloneDestination(entry.destination);
-	}
-	cloneCache.clear();
+export function disposeGitHubCloneSession(session: GitHubCloneSession): Promise<void> {
+	if (session.disposal) return session.disposal;
+	session.controller.abort();
+	session.disposal = (async () => {
+		const results = await Promise.allSettled([...session.cache.values()].map((entry) => entry.clonePromise));
+		const failure = results.find((result) => result.status === "rejected");
+		if (failure?.status === "rejected") throw failure.reason;
+		session.cache.clear();
+		releaseEmptyRuntime(session);
+		await session.sweep;
+	})();
+	return session.disposal;
+}
+
+export function clearCloneCache(): Promise<void> {
+	const previous = defaultCloneSession;
+	defaultCloneSession = createGitHubCloneSession();
 	cachedConfig = null;
+	return disposeGitHubCloneSession(previous);
 }

@@ -6,7 +6,8 @@ import { MIMEType } from "node:util";
 import { activityMonitor } from "./activity.ts";
 import { extractRSCContent } from "./rsc-extract.ts";
 import { extractPDFToMarkdown, isPDF } from "./pdf-extract.ts";
-import { extractGitHub } from "./github-extract.ts";
+import { extractGitHub, type GitHubCloneSession } from "./github-extract.ts";
+export { createGitHubCloneSession, disposeGitHubCloneSession } from "./github-extract.ts";
 import { fetchRemoteUrl } from "./ssrf-protection.ts";
 
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -54,6 +55,7 @@ export async function extractContent(
 	url: string,
 	signal?: AbortSignal,
 	options?: ExtractOptions,
+	cloneSession?: GitHubCloneSession,
 ): Promise<ExtractedContent> {
 	if (signal?.aborted) {
 		return { url, title: "", content: "", error: "Aborted" };
@@ -69,7 +71,7 @@ export async function extractContent(
 	}
 
 	try {
-		const ghResult = await extractGitHub(url, signal, options?.forceClone);
+		const ghResult = await extractGitHub(url, signal, options?.forceClone, cloneSession);
 		if (ghResult) return ghResult;
 		if (signal?.aborted) return abortedResult(url);
 	} catch (err) {
@@ -344,6 +346,7 @@ export async function fetchAllContent(
 	urls: string[],
 	signal?: AbortSignal,
 	options?: ExtractOptions,
+	cloneSession?: GitHubCloneSession,
 ): Promise<ExtractedContent[]> {
-	return Promise.all(urls.map((url) => fetchLimit(() => extractContent(url, signal, options))));
+	return Promise.all(urls.map((url) => fetchLimit(() => extractContent(url, signal, options, cloneSession))));
 }
