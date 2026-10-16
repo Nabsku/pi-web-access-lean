@@ -131,6 +131,12 @@ credentials are not included in provider errors.
 Configured Exa API keys use Exa's account limits directly. Any legacy
 `~/.pi/exa-usage.json` file is ignored and left untouched.
 
+Keyed Exa searches use `/search` and build answers from source highlights.
+Keyless searches use the advanced MCP tool for domain/recency filters or
+`includeContent`. If that tool is missing, basic MCP search uses best-effort
+query hints instead of strict filters. Other errors are not retried through
+the basic tool.
+
 ## Tools
 
 ### `web_search`
@@ -153,7 +159,7 @@ Parameters:
 - `recencyFilter`: `day`, `week`, `month`, or `year`
 - `domainFilter`: domains to include; prefix with `-` to exclude
 - `provider`: `auto`, `exa`, or `perplexity`
-- `includeContent`: fetch page content for results in the background
+- `includeContent`: include page text returned by the search provider inline
 
 ### `code_search`
 
