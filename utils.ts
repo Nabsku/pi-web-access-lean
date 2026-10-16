@@ -6,6 +6,11 @@ export function parseConfigRoot(raw: string): Record<string, unknown> {
 	return parsed as Record<string, unknown>;
 }
 
+export function isAbortError(err: unknown): boolean {
+	return (err instanceof Error && err.name === "AbortError")
+		|| (err instanceof Error ? err.message : String(err)).toLowerCase().includes("abort");
+}
+
 export function formatSeconds(s: number): string {
 	const h = Math.floor(s / 3600);
 	const m = Math.floor((s % 3600) / 60);

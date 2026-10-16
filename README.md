@@ -115,6 +115,11 @@ Provider selection:
 - `exa`: Exa only
 - `perplexity`: Perplexity only
 
+Named selections stay strict, including configured providers. Only `auto` can
+switch providers after an ordinary failure or a response with neither an answer
+nor sources; if no provider returns content, it returns the first empty success.
+Batches remain serial and keep input order; cancellation stops remaining queries.
+
 Environment variables take precedence where supported:
 
 - `EXA_API_KEY`

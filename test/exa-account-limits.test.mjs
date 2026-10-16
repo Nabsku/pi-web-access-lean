@@ -163,7 +163,7 @@ test("caller abort remains terminal rather than triggering fallback", async t =>
 		console.log(JSON.stringify({ found, calls }));
 	`);
 	assert.equal(result.found.error.name, "AbortError");
-	assert.deepEqual(result.calls, [{ host: "api.exa.ai", aborted: true }]);
+	assert.deepEqual(result.calls, []);
 });
 
 test("keyless web and code search keep using Exa MCP with an untouched malformed legacy journal", async t => {
