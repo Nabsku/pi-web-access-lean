@@ -171,7 +171,12 @@ Parameters:
 - `recencyFilter`: `day`, `week`, `month`, or `year`
 - `domainFilter`: domains to include; prefix with `-` to exclude
 - `provider`: `auto`, `exa`, or `perplexity`
-- `includeContent`: include page text returned by the search provider inline
+- `includeContent`: return provider page text and fetch uncovered result URLs inline
+
+Provider page bodies stay intact and only uncovered URLs are fetched. When gaps
+are filled, content follows first-seen source-URL order, retaining every body for
+a repeated URL; fully covered batches keep their existing order. Fetch failures
+appear inline for the affected URL.
 
 A singular `query` containing a JSON array of strings expands into serial queries;
 mixed or malformed array text stays literal. Structured `queries` takes precedence.
