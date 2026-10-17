@@ -255,7 +255,7 @@ export default function webAccessLean(pi: ExtensionAPI) {
 
 			const searchResults: QueryResultData[] = [];
 			const allUrls: string[] = [];
-			const allInlineContent: Array<{ url: string; title: string; content: string; error: string | null }> = [];
+			let allInlineContent: ExtractedContent[] = [];
 			const provider = normalizeProviderInput(params.provider);
 			const recencyFilter = normalizeRecencyFilter(params.recencyFilter);
 			const cancellation = createCredentialSafeCancellation(signal);
@@ -282,6 +282,23 @@ export default function webAccessLean(pi: ExtensionAPI) {
 					cancellation.throwIfAborted();
 					if (isAbortError(err)) throw err;
 					searchResults.push({ query, answer: "", results: [], error: err instanceof Error ? err.message : String(err), provider });
+				}
+			}
+
+			if (params.includeContent) {
+				const providedByUrl = new Map<string, ExtractedContent[]>();
+				for (const item of allInlineContent) {
+					const provided = providedByUrl.get(item.url);
+					if (provided) provided.push(item);
+					else providedByUrl.set(item.url, [item]);
+				}
+				const missing = allUrls.filter(url => !providedByUrl.has(url));
+				if (missing.length > 0) {
+					onUpdate?.({ content: [{ type: "text", text: `Fetching ${missing.length} URL(s)...` }], details: { phase: "fetch", progress: 0 } });
+					const fetched = await fetchAllContent(missing, signal);
+					cancellation.throwIfAborted();
+					let next = 0;
+					allInlineContent = allUrls.flatMap(url => providedByUrl.get(url) ?? [fetched[next++]]);
 				}
 			}
 
