@@ -113,9 +113,15 @@ if (mode === "prompts") {
 	record("observations.jsonl", { ...flags, askpassDisabled: process.env.GIT_ASKPASS === "", controllingTty, stdinEof: suppressed && fs.readSync(0, Buffer.alloc(1), 0, 1, null) === 0, authRetained: process.env.GH_TOKEN === "synthetic-fixture-token" });
 	return;
 }
+const publishReady = (value) => {
+	const ready = path.join(root, "clone-ready");
+	const temporary = ready + "." + process.pid;
+	fs.writeFileSync(temporary, JSON.stringify(value));
+	fs.renameSync(temporary, ready);
+};
 if (mode === "startup") {
 	process.on("SIGTERM", () => {});
-	fs.writeFileSync(path.join(root, "clone-ready"), JSON.stringify({ at: Date.now(), rootPid: process.pid }));
+	publishReady({ at: Date.now(), rootPid: process.pid });
 	setInterval(() => {}, 1000);
 	return;
 }
@@ -125,7 +131,7 @@ if (mode === "resistant" || mode === "root-exits") {
 	const helper = spawn(process.execPath, [executable], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
 	// Identity comes from the spawner, before helper boot; readiness is separate.
 	record("processes.jsonl", { pid: helper.pid, role: "helper", executable });
-	helper.once("message", () => fs.writeFileSync(path.join(root, "clone-ready"), JSON.stringify({ at: Date.now(), rootPid: process.pid, helperPid: helper.pid })));
+	helper.once("message", () => publishReady({ at: Date.now(), rootPid: process.pid, helperPid: helper.pid }));
 	setInterval(() => {}, 1000);
 }
 `;
@@ -172,6 +178,47 @@ async function run(t, fixture, source) {
 	assert.equal(child.status, 0, child.error?.message || child.stderr);
 	assert.equal(exit.states.some(({ alive }) => alive), false, `owned process exit budget exceeded: ${JSON.stringify(exit)}`);
 	return { ...result, commands: records(fixture.root, "commands.jsonl"), identities, observations: records(fixture.root, "observations.jsonl") };
+}
+
+for (const mode of ["startup", "resistant"]) {
+	test(`clone fixture publishes complete ${mode} readiness`, { skip: process.platform === "win32" }, async (t) => {
+		const f = await fixture(t, "gh", mode);
+		const preload = join(f.root, "observe-readiness.cjs");
+		await writeFile(preload, `
+			const fs = require("node:fs");
+			const path = require("node:path");
+			const root = process.env.GITHUB_PROCESS_ROOT;
+			const ready = path.join(root, "clone-ready");
+			const write = fs.writeFileSync;
+			fs.writeFileSync = (file, data, ...options) => {
+				if (typeof file !== "string" || !path.basename(file).startsWith("clone-ready")) return write(file, data, ...options);
+				const fd = fs.openSync(file, "w");
+				try {
+					// Observe the public name between creation and the first byte, without a scheduling race.
+					fs.appendFileSync(path.join(root, "readiness-writes.jsonl"), JSON.stringify({ readyVisible: fs.existsSync(ready) }) + "\\n");
+					return write(fd, data, ...options);
+				} finally {
+					fs.closeSync(fd);
+				}
+			};
+		`);
+		f.env.NODE_OPTIONS = `--require=${JSON.stringify(preload)}`;
+		const result = await run(t, f, `
+			const pending = extractGitHub(url, controller.signal, true);
+			await waitForFile("clone-ready");
+			const ready = JSON.parse(readFileSync(join(root, "clone-ready"), "utf8"));
+			controller.abort();
+			const result = await pending;
+			console.log(JSON.stringify({ ready, cancelled: result === null, listeners: getEventListeners(controller.signal, "abort").length, requestAt, completedAt: Date.now() }));
+		`);
+		assert.deepEqual(records(f.root, "readiness-writes.jsonl"), [{ readyVisible: false }]);
+		assert.equal(result.cancelled, true);
+		assert.equal(result.listeners, 0);
+		assert.ok(Number.isInteger(result.ready.at) && result.ready.at >= result.requestAt && result.ready.at <= result.completedAt);
+		const rootPid = result.identities.find(({ role }) => role === "clone").pid;
+		const helperPid = result.identities.find(({ role }) => role === "helper")?.pid;
+		assert.deepEqual(result.ready, { at: result.ready.at, rootPid, ...(mode === "resistant" ? { helperPid } : {}) });
+	});
 }
 
 for (const route of ["gh", "git"]) {
