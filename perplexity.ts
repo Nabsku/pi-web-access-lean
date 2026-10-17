@@ -3,11 +3,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
-import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import { parseConfigRoot } from "./utils.ts";
+import { createCredentialSafeCancellation, hasCredentialSource, redactCredential, resolveCredential, type CredentialSafeCancellation } from "./credential-source.ts";
+import { isAbortError, parseConfigRoot } from "./utils.ts";
 
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions";
 const CONFIG_PATH = join(homedir(), ".pi", "web-search.json");
+const REQUEST_TIMEOUT_MS = 30_000;
 
 const RATE_LIMIT = {
 	maxRequests: 10,
@@ -33,6 +34,8 @@ export interface SearchOptions {
 	recencyFilter?: "day" | "week" | "month" | "year";
 	domainFilter?: string[];
 	signal?: AbortSignal;
+	/** @internal Shared only within one search or registered-tool invocation. */
+	cancellation?: CredentialSafeCancellation;
 }
 
 interface WebSearchConfig {
@@ -108,6 +111,8 @@ export function isPerplexityAvailable(): boolean {
 }
 
 export async function searchWithPerplexity(query: string, options: SearchOptions = {}): Promise<SearchResponse> {
+	const cancellation = options.cancellation ?? createCredentialSafeCancellation(options.signal);
+	cancellation.throwIfAborted();
 	checkRateLimit();
 
 	const activityId = activityMonitor.logStart({ type: "api", query });
@@ -119,7 +124,17 @@ export async function searchWithPerplexity(query: string, options: SearchOptions
 		windowMs: RATE_LIMIT.windowMs,
 	});
 
-	const apiKey = await getApiKey(options.signal);
+	let apiKey: string;
+	try {
+		apiKey = await getApiKey(options.signal);
+	} catch (err) {
+		if (options.signal?.aborted) {
+			activityMonitor.logComplete(activityId, 0);
+			cancellation.throwIfAborted();
+		}
+		throw err;
+	}
+	cancellation.addCredential(apiKey);
 	const numResults = typeof options.numResults === "number" && Number.isFinite(options.numResults)
 		? Math.max(1, Math.min(Math.floor(options.numResults), 20))
 		: 5;
@@ -142,8 +157,13 @@ export async function searchWithPerplexity(query: string, options: SearchOptions
 		}
 	}
 
-	let response: Response;
+	const startedAt = performance.now();
+	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+	const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+	let response: Response | undefined;
+	let data: Record<string, unknown>;
 	try {
+		signal.throwIfAborted();
 		response = await fetch(PERPLEXITY_API_URL, {
 			method: "POST",
 			headers: {
@@ -151,13 +171,39 @@ export async function searchWithPerplexity(query: string, options: SearchOptions
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify(requestBody),
-			...(options.signal ? { signal: options.signal } : {}),
+			signal,
 		});
+		signal.throwIfAborted();
+
+		if (!response.ok) {
+			const errorText = await response.text();
+			signal.throwIfAborted();
+			throw new Error(`Perplexity API error ${response.status}: ${errorText}`);
+		}
+
+		try {
+			data = await response.json();
+		} catch (err) {
+			if (signal.aborted || isAbortError(err)) throw err;
+			const message = err instanceof Error ? err.message : String(err);
+			throw new Error(`Perplexity API returned invalid JSON: ${message}`);
+		}
+		signal.throwIfAborted();
 	} catch (err) {
+		if (options.signal?.aborted) {
+			activityMonitor.logComplete(activityId, 0);
+			cancellation.throwIfAborted();
+		}
+		const timedOut = timeout.aborted;
+		if (timedOut) {
+			err = new Error(`Perplexity API error 408: request deadline exceeded (budget ${REQUEST_TIMEOUT_MS} ms, elapsed ${Math.round(performance.now() - startedAt)} ms). Retry or narrow the query.`);
+		}
 		const message = err instanceof Error ? err.message : String(err);
 		const redactedMessage = redactCredential(message, apiKey);
-		if (redactedMessage.toLowerCase().includes("abort")) {
+		if (isAbortError(err)) {
 			activityMonitor.logComplete(activityId, 0);
+		} else if (response && !timedOut) {
+			activityMonitor.logComplete(activityId, response.status);
 		} else {
 			activityMonitor.logError(activityId, redactedMessage);
 		}
@@ -167,26 +213,16 @@ export async function searchWithPerplexity(query: string, options: SearchOptions
 		throw redactedError;
 	}
 
-	if (!response.ok) {
-		activityMonitor.logComplete(activityId, response.status);
-		const errorText = redactCredential(await response.text(), apiKey);
-		throw new Error(`Perplexity API error ${response.status}: ${errorText}`);
-	}
-
-	let data: Record<string, unknown>;
-	try {
-		data = await response.json();
-	} catch (err) {
-		activityMonitor.logComplete(activityId, response.status);
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Perplexity API returned invalid JSON: ${message}`);
-	}
-
 	const answer = (data.choices as Array<{ message?: { content?: string } }>)?.[0]?.message?.content || "";
 	const citations = Array.isArray(data.citations) ? data.citations : [];
+	// Sonar footnotes index the original array, so retain the entire referenced prefix.
+	let citationCount = numResults;
+	for (const match of answer.matchAll(/\[(\d+)\]/g)) {
+		citationCount = Math.max(citationCount, Number(match[1]));
+	}
 
 	const results: SearchResult[] = [];
-	for (let i = 0; i < Math.min(citations.length, numResults); i++) {
+	for (let i = 0; i < Math.min(citations.length, citationCount); i++) {
 		const citation = citations[i];
 		if (typeof citation === "string") {
 			results.push({ title: `Source ${i + 1}`, url: citation, snippet: "" });
