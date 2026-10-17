@@ -49,6 +49,31 @@ export function redactCredential(text: string, credential: string | null | undef
 	return credential ? text.split(credential).join("[redacted]") : text;
 }
 
+export interface CredentialSafeCancellation {
+	addCredential(credential: string): void;
+	throwIfAborted(): void;
+}
+
+export function createCredentialSafeCancellation(signal?: AbortSignal): CredentialSafeCancellation {
+	const credentials = new Set<string>();
+	return {
+		addCredential(credential) { credentials.add(credential); },
+		throwIfAborted() {
+			if (!signal?.aborted) return;
+			const reason = signal.reason;
+			const message = reason instanceof Error ? reason.message : String(reason);
+			let redactedMessage = message;
+			for (const credential of [...credentials].sort((a, b) => b.length - a.length)) {
+				redactedMessage = redactCredential(redactedMessage, credential);
+			}
+			if (redactedMessage === message) throw reason;
+			const error = new Error(redactedMessage);
+			if (reason instanceof Error) error.name = reason.name;
+			throw error;
+		},
+	};
+}
+
 function normalize(value: unknown): string | null {
 	if (typeof value !== "string") return null;
 	const normalized = value.trim();

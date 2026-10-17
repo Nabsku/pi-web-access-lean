@@ -8,6 +8,7 @@ import { executeCodeSearch } from "./code-search.ts";
 import type { SearchResult } from "./perplexity.ts";
 import { activityMonitor, type ActivityEntry } from "./activity.ts";
 import { isAbortError } from "./utils.ts";
+import { createCredentialSafeCancellation } from "./credential-source.ts";
 
 const MAX_INLINE_CONTENT = 30000;
 let widgetVisible = false;
@@ -183,7 +184,7 @@ export default function webAccessLean(pi: ExtensionAPI) {
 		parameters: Type.Object({
 			query: Type.Optional(Type.String({ description: "Single search query" })),
 			queries: Type.Optional(Type.Array(Type.String(), { description: "Multiple search queries" })),
-			numResults: Type.Optional(Type.Number({ description: "Results per query, default 5, max 20" })),
+			numResults: Type.Optional(Type.Number({ description: "Results per query, default 5, max 20; Sonar keeps additional cited sources" })),
 			includeContent: Type.Optional(Type.Boolean({ description: "Fetch page content for results" })),
 			recencyFilter: Type.Optional(StringEnum(["day", "week", "month", "year"], { description: "Recency filter" })),
 			domainFilter: Type.Optional(Type.Array(Type.String(), { description: "Domains to include/exclude" })),
@@ -203,9 +204,10 @@ export default function webAccessLean(pi: ExtensionAPI) {
 			const allInlineContent: Array<{ url: string; title: string; content: string; error: string | null }> = [];
 			const provider = normalizeProviderInput(params.provider);
 			const recencyFilter = normalizeRecencyFilter(params.recencyFilter);
+			const cancellation = createCredentialSafeCancellation(signal);
 
 			for (let i = 0; i < queryList.length; i++) {
-				signal?.throwIfAborted();
+				cancellation.throwIfAborted();
 				const query = queryList[i];
 				onUpdate?.({ content: [{ type: "text", text: `Searching ${i + 1}/${queryList.length}: ${query}` }], details: { phase: "search", progress: i / queryList.length } });
 				try {
@@ -216,13 +218,15 @@ export default function webAccessLean(pi: ExtensionAPI) {
 						domainFilter: params.domainFilter,
 						includeContent: params.includeContent,
 						signal,
+						cancellation,
 					});
-					signal?.throwIfAborted();
+					cancellation.throwIfAborted();
 					searchResults.push({ query, answer, results, error: null, provider: usedProvider });
 					for (const r of results) if (!allUrls.includes(r.url)) allUrls.push(r.url);
 					if (inlineContent) allInlineContent.push(...inlineContent);
 				} catch (err) {
-					if (signal?.aborted || isAbortError(err)) throw err;
+					cancellation.throwIfAborted();
+					if (isAbortError(err)) throw err;
 					searchResults.push({ query, answer: "", results: [], error: err instanceof Error ? err.message : String(err), provider });
 				}
 			}

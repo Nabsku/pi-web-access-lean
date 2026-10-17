@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { isPerplexityAvailable, searchWithPerplexity, type SearchResponse, type SearchOptions } from "./perplexity.ts";
 import { isExaAvailable, searchWithExa } from "./exa.ts";
-import { CredentialResolutionError } from "./credential-source.ts";
+import { createCredentialSafeCancellation, CredentialResolutionError } from "./credential-source.ts";
 import { isAbortError, parseConfigRoot } from "./utils.ts";
 
 export type SearchProvider = "auto" | "perplexity" | "exa";
@@ -48,20 +48,26 @@ function errorMessage(err: unknown): string {
 }
 
 export async function search(query: string, options: FullSearchOptions = {}): Promise<AttributedSearchResponse> {
-	options.signal?.throwIfAborted();
+	const cancellation = options.cancellation ?? createCredentialSafeCancellation(options.signal);
+	cancellation.throwIfAborted();
 	const provider = options.provider && options.provider !== "auto"
 		? options.provider
 		: getSearchConfig().searchProvider;
 
 	if (provider === "perplexity") {
-		const result = await searchWithPerplexity(query, options);
-		options.signal?.throwIfAborted();
-		return { ...result, provider: "perplexity" };
+		try {
+			const result = await searchWithPerplexity(query, { ...options, cancellation });
+			cancellation.throwIfAborted();
+			return { ...result, provider: "perplexity" };
+		} catch (err) {
+			cancellation.throwIfAborted();
+			throw err;
+		}
 	}
 
 	if (provider === "exa") {
 		const result = await searchWithExa(query, options);
-		options.signal?.throwIfAborted();
+		cancellation.throwIfAborted();
 		if (result) return { ...result, provider: "exa" };
 		throw new Error("Exa search returned no results.");
 	}
@@ -72,14 +78,14 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 	if (isExaAvailable()) {
 		try {
 			const result = await searchWithExa(query, options);
-			options.signal?.throwIfAborted();
+			cancellation.throwIfAborted();
 			if (result) {
 				const response: AttributedSearchResponse = { ...result, provider: "exa" };
 				if (result.answer.trim() || result.results.length) return response;
 				firstEmpty = response;
 			}
 		} catch (err) {
-			options.signal?.throwIfAborted();
+			cancellation.throwIfAborted();
 			if (err instanceof CredentialResolutionError || isAbortError(err)) throw err;
 			fallbackErrors.push(`Exa: ${errorMessage(err)}`);
 		}
@@ -87,13 +93,13 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 
 	if (isPerplexityAvailable()) {
 		try {
-			const result = await searchWithPerplexity(query, options);
-			options.signal?.throwIfAborted();
+			const result = await searchWithPerplexity(query, { ...options, cancellation });
+			cancellation.throwIfAborted();
 			const response: AttributedSearchResponse = { ...result, provider: "perplexity" };
 			if (result.answer.trim() || result.results.length) return response;
 			firstEmpty ??= response;
 		} catch (err) {
-			options.signal?.throwIfAborted();
+			cancellation.throwIfAborted();
 			if (isAbortError(err)) throw err;
 			fallbackErrors.push(`Perplexity: ${errorMessage(err)}`);
 		}

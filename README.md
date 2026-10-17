@@ -120,6 +120,12 @@ switch providers after an ordinary failure or a response with neither an answer
 nor sources; if no provider returns content, it returns the first empty success.
 Batches remain serial and keep input order; cancellation stops remaining queries.
 
+Perplexity's Sonar HTTP requests have a 30-second deadline, including response
+body reads, starting after credential resolution. Exceeding it reports the budget
+and elapsed time with retry guidance; it is an ordinary per-query failure, not
+caller cancellation. This retained deadline is a policy, not a measured provider
+latency guarantee.
+
 Environment variables take precedence where supported:
 
 - `EXA_API_KEY`
@@ -160,7 +166,8 @@ web_search({ query: "benchmark result", includeContent: true })
 Parameters:
 
 - `query` / `queries`: single query or batch of queries
-- `numResults`: results per query, default `5`, max `20`
+- `numResults`: results per query, default `5`, max `20`; Sonar preserves the
+  available source prefix through its highest answer citation, even beyond this count
 - `recencyFilter`: `day`, `week`, `month`, or `year`
 - `domainFilter`: domains to include; prefix with `-` to exclude
 - `provider`: `auto`, `exa`, or `perplexity`
