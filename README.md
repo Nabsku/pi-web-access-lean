@@ -166,12 +166,17 @@ web_search({ query: "benchmark result", includeContent: true })
 Parameters:
 
 - `query` / `queries`: single query or batch of queries
-- `numResults`: results per query, default `5`, max `20`; Sonar preserves the
+- `numResults`: integer results per query from `1` to `20`, default `5`; Sonar preserves the
   available source prefix through its highest answer citation, even beyond this count
 - `recencyFilter`: `day`, `week`, `month`, or `year`
 - `domainFilter`: domains to include; prefix with `-` to exclude
 - `provider`: `auto`, `exa`, or `perplexity`
 - `includeContent`: include page text returned by the search provider inline
+
+A singular `query` containing a JSON array of strings expands into serial queries;
+mixed or malformed array text stays literal. Structured `queries` takes precedence.
+`queries` and `domainFilter` also accept JSON-encoded string arrays from model bridges;
+malformed JSON and wrongly typed lists fail before searching. Providers remain singular.
 
 ### `code_search`
 
@@ -204,6 +209,9 @@ Parameters:
 
 - `url` / `urls`: single URL/path or multiple URLs
 - `forceClone`: clone GitHub repositories that exceed the size threshold
+
+URLs are trimmed and deduplicated in input order. Nonblank `urls` takes precedence;
+an empty or all-blank list falls back to `url`. Execution and call rendering agree.
 
 GitHub clones use private per-session directories inside `githubClone.clonePath`.
 Requests in the same session reuse a repository/ref checkout, and `/tree` keeps it.

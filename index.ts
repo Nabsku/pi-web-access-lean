@@ -54,6 +54,62 @@ function normalizeQueryList(queryList: unknown[]): string[] {
 	return normalized;
 }
 
+function parseStringArray(value: string): string[] | undefined {
+	const parsed: unknown = JSON.parse(value);
+	return Array.isArray(parsed) && parsed.every((entry): entry is string => typeof entry === "string") ? parsed : undefined;
+}
+
+function prepareSearchArguments(args: unknown): Record<string, unknown> {
+	if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("web_search arguments must be an object");
+	const input = args as Record<string, unknown>;
+	// Pi's schema converter otherwise truncates fractional result counts.
+	const numResults = input.numResults;
+	if (typeof numResults === "number" || typeof numResults === "string") {
+		const count = Number(numResults);
+		if (!Number.isInteger(count)) throw new Error(`Invalid numResults: configured integer range 1..20, observed ${count}. Use a whole-number count from 1 to 20.`);
+	}
+	let output: Record<string, unknown> | undefined;
+	for (const key of ["queries", "domainFilter"]) {
+		const value = input[key];
+		if (value === undefined) continue;
+		if (Array.isArray(value) && value.every(entry => typeof entry === "string")) continue;
+		if (typeof value !== "string" || !value.trim().startsWith("[")) throw new Error(`${key} must be an array of strings`);
+		let parsed: string[] | undefined;
+		try {
+			parsed = parseStringArray(value);
+		} catch {
+			throw new Error(`${key} must be an array of strings; the given value is not valid JSON`);
+		}
+		if (!parsed) throw new Error(`${key} must be an array of strings`);
+		output ??= { ...input };
+		output[key] = parsed;
+	}
+	return output ?? input;
+}
+
+function normalizeSearchQueries(input: { query?: unknown; queries?: unknown }): string[] {
+	let queries = input.queries;
+	// Call renderers also receive raw, partially streamed arguments.
+	if (typeof queries === "string" && queries.trim().startsWith("[")) {
+		try { queries = parseStringArray(queries); } catch { /* Incomplete arguments are not executable yet. */ }
+	}
+	if (Array.isArray(queries)) return normalizeQueryList(queries);
+	if (typeof input.query !== "string") return [];
+	const query = input.query.trim();
+	if (query.startsWith("[") && query.endsWith("]")) {
+		try {
+			const expanded = parseStringArray(query);
+			if (expanded) return normalizeQueryList(expanded);
+		} catch { /* Malformed singular arrays remain literal search text. */ }
+	}
+	return normalizeQueryList([query]);
+}
+
+function normalizeFetchUrls(input: { url?: unknown; urls?: unknown }): string[] {
+	const urls = normalizeQueryList(Array.isArray(input.urls) ? input.urls : []);
+	return urls.length > 0 ? [...new Set(urls)] : normalizeQueryList([input.url]);
+}
+
 function formatSearchSummary(results: SearchResult[], answer: string): string {
 	if (results.length === 0) {
 		return answer ? `${answer}\n\n---\n\nSources:\nNo sources returned.` : "No results found.";
@@ -179,22 +235,20 @@ export default function webAccessLean(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "web_search",
 		label: "Web Search",
+		prepareArguments: prepareSearchArguments,
 		description: "Search the web. Supports single query or batch queries, recency/domain filters, optional page-content fetch.",
 		promptSnippet: "Use for current/external web research. Use queries for multi-angle research.",
 		parameters: Type.Object({
 			query: Type.Optional(Type.String({ description: "Single search query" })),
 			queries: Type.Optional(Type.Array(Type.String(), { description: "Multiple search queries" })),
-			numResults: Type.Optional(Type.Number({ description: "Results per query, default 5, max 20; Sonar keeps additional cited sources" })),
+			numResults: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, description: "Results per query, default 5, max 20; Sonar keeps additional cited sources" })),
 			includeContent: Type.Optional(Type.Boolean({ description: "Fetch page content for results" })),
 			recencyFilter: Type.Optional(StringEnum(["day", "week", "month", "year"], { description: "Recency filter" })),
 			domainFilter: Type.Optional(Type.Array(Type.String(), { description: "Domains to include/exclude" })),
 			provider: Type.Optional(StringEnum(["auto", "perplexity", "exa"], { description: "Search provider" })),
 		}),
 		async execute(_toolCallId, params, signal, onUpdate) {
-			const rawQueryList: unknown[] = Array.isArray(params.queries)
-				? params.queries
-				: (params.query !== undefined ? [params.query] : []);
-			const queryList = normalizeQueryList(rawQueryList);
+			const queryList = normalizeSearchQueries(params);
 			if (queryList.length === 0) {
 				return textResult("Error: No query provided.", { error: "No query provided" });
 			}
@@ -234,10 +288,9 @@ export default function webAccessLean(pi: ExtensionAPI) {
 			return buildSearchReturn({ queryList, results: searchResults, urls: allUrls, includeContent: params.includeContent ?? false, inlineContent: allInlineContent });
 		},
 		renderCall(args, theme) {
-			const input = args as { query?: unknown; queries?: unknown };
-			const queryList = normalizeQueryList(Array.isArray(input.queries) ? input.queries : (input.query !== undefined ? [input.query] : []));
+			const queryList = normalizeSearchQueries(args);
 			const label = queryList.length === 1 ? queryList[0] : `${queryList.length} queries`;
-			return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("accent", label || "(no query)"), 0, 0);
+			return new Text(theme.fg("toolTitle", theme.bold("search ")) + theme.fg("accent", queryList.length ? label : "(no query)"), 0, 0);
 		},
 		renderResult(result, _opts, theme) {
 			const details = result.details as { error?: string; successfulQueries?: number; queryCount?: number; totalResults?: number };
@@ -280,12 +333,12 @@ export default function webAccessLean(pi: ExtensionAPI) {
 			forceClone: Type.Optional(Type.Boolean({ description: "Force cloning large GitHub repositories" })),
 		}),
 		async execute(_toolCallId, params, signal, onUpdate) {
-			const urlList = params.urls ?? (params.url ? [params.url] : []);
+			const urlList = normalizeFetchUrls(params);
 			if (urlList.length === 0) {
 				return { content: [{ type: "text", text: "Error: No URL provided." }], details: { error: "No URL provided" } };
 			}
 			onUpdate?.({ content: [{ type: "text", text: `Fetching ${urlList.length} URL(s)...` }], details: { phase: "fetch", progress: 0 } });
-			const results = await fetchAllContent(urlList, signal, { forceClone: params.forceClone });
+			const results = await fetchAllContent(urlList, signal, { forceClone: typeof params.forceClone === "boolean" ? params.forceClone : undefined });
 			const successful = results.filter((r) => !r.error).length;
 
 			if (urlList.length === 1) {
@@ -304,9 +357,9 @@ export default function webAccessLean(pi: ExtensionAPI) {
 			return { content: [{ type: "text", text: output.trim() }], details: { urls: urlList, successful, urlCount: urlList.length } };
 		},
 		renderCall(args, theme) {
-			const { url, urls } = args as { url?: string; urls?: string[] };
-			const urlList = urls ?? (url ? [url] : []);
-			return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", urlList.length === 1 ? urlList[0] : `${urlList.length} URLs`), 0, 0);
+			const urlList = normalizeFetchUrls(args);
+			const label = urlList.length === 1 ? urlList[0] : `${urlList.length} URLs`;
+			return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", urlList.length ? label : "(no URL)"), 0, 0);
 		},
 		renderResult(result, _opts, theme) {
 			const details = result.details as { error?: string; successful?: number; urlCount?: number; title?: string; totalChars?: number };
