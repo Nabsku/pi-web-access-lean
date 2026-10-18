@@ -173,7 +173,8 @@ Parameters:
 - `provider`: `auto`, `exa`, or `perplexity`
 - `includeContent`: return provider page text and fetch uncovered result URLs inline
 
-Provider page bodies stay intact and only uncovered URLs are fetched. When gaps
+Provider page bodies are kept rather than refetched, with inline data URIs omitted
+as described below. Only uncovered URLs are fetched. When gaps
 are filled, content follows first-seen source-URL order, retaining every body for
 a repeated URL; fully covered batches keep their existing order. Fetch failures
 appear inline for the affected URL.
@@ -247,6 +248,15 @@ fetch_content(url)
 Challenge pages are reported as fetch failures, not returned as article content.
 This fork has no Jina Reader or other hosted page-extraction fallback. If direct
 extraction fails, use `web_search` for another source or open the page in a browser.
+
+Weak HTML extraction can recover useful content from embedded Next.js RSC data.
+Inline `data:` URIs in fetched page text and derived titles, and in provider-supplied
+page bodies, are replaced with omission markers containing MIME type, encoding,
+byte counts and a SHA-256 digest;
+the payload is not retained. Surrounding prose and image alt text are preserved.
+The existing 30,000-code-unit per-body slice keeps surrogate pairs whole. Search
+answers and `code_search` output are unchanged; download the source directly if
+you need an omitted payload or truncated tail.
 
 ## Commands
 

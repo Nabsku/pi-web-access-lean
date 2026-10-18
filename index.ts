@@ -9,8 +9,18 @@ import type { SearchResult } from "./perplexity.ts";
 import { activityMonitor, type ActivityEntry } from "./activity.ts";
 import { isAbortError } from "./utils.ts";
 import { createCredentialSafeCancellation } from "./credential-source.ts";
+import { sanitizeInlineDataUris } from "./data-uri-sanitize.ts";
 
 const MAX_INLINE_CONTENT = 30000;
+
+function truncateInlineContent(content: string): string {
+	if (content.length <= MAX_INLINE_CONTENT) return content;
+	let end = MAX_INLINE_CONTENT;
+	const high = content.charCodeAt(end - 1), low = content.charCodeAt(end);
+	if (high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff) end--;
+	return content.slice(0, end) + "\n\n[Content truncated]";
+}
+
 let widgetVisible = false;
 let widgetUnsubscribe: (() => void) | null = null;
 
@@ -169,9 +179,8 @@ function buildSearchReturn(args: {
 				output += `### ${item.url}\n\nError: ${item.error}\n\n`;
 				continue;
 			}
-			const content = item.content.length > MAX_INLINE_CONTENT
-				? item.content.slice(0, MAX_INLINE_CONTENT) + "\n\n[Content truncated]"
-				: item.content;
+			// Provider-supplied bodies do not pass through the extraction gateway.
+			const content = truncateInlineContent(sanitizeInlineDataUris(item.content));
 			output += `### ${item.title || item.url}\n${item.url}\n\n${content}\n\n`;
 		}
 	}
@@ -365,14 +374,14 @@ export default function webAccessLean(pi: ExtensionAPI) {
 				const r = results[0];
 				if (r.error !== null) return { content: [{ type: "text", text: `Error: ${r.error}` }], details: { urls: urlList, successful: 0, error: r.error }, isError: true };
 				const truncated = r.content.length > MAX_INLINE_CONTENT;
-				const text = truncated ? r.content.slice(0, MAX_INLINE_CONTENT) + "\n\n[Content truncated]" : r.content;
+				const text = truncateInlineContent(r.content);
 				return { content: [{ type: "text", text }], details: { urls: urlList, successful: 1, title: r.title, totalChars: r.content.length, truncated } };
 			}
 
 			let output = "## Fetched URLs\n\n";
 			for (const r of results) {
 				if (r.error !== null) output += `- ${r.url}: Error - ${r.error}\n`;
-				else output += `## ${r.title || r.url}\n${r.url}\n\n${r.content.length > MAX_INLINE_CONTENT ? r.content.slice(0, MAX_INLINE_CONTENT) + "\n\n[Content truncated]" : r.content}\n\n`;
+				else output += `## ${r.title || r.url}\n${r.url}\n\n${truncateInlineContent(r.content)}\n\n`;
 			}
 			return { content: [{ type: "text", text: output.trim() }], details: { urls: urlList, successful, urlCount: urlList.length }, ...(successful === 0 ? { isError: true } : {}) };
 		},
