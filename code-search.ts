@@ -48,12 +48,14 @@ export async function executeCodeSearch(
 	params: { query: string; maxTokens?: number },
 	signal?: AbortSignal,
 ): Promise<{
+	isError?: boolean;
 	content: Array<{ type: "text"; text: string }>;
 	details: { query: string; maxTokens: number; error?: string; mode?: "code-context" | "web-search-fallback" };
 }> {
 	const query = params.query.trim();
 	if (!query) {
 		return {
+			isError: true,
 			content: [{ type: "text", text: "Error: No query provided." }],
 			details: { query: "", maxTokens: params.maxTokens ?? DEFAULT_MAX_TOKENS, error: "No query provided" },
 		};
@@ -100,6 +102,7 @@ export async function executeCodeSearch(
 		}
 		activityMonitor.logError(activityId, message);
 		return {
+			isError: true,
 			content: [{ type: "text", text: `Error: ${message}` }],
 			details: { query, maxTokens, error: message },
 		};

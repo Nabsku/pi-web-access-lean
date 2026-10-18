@@ -152,20 +152,20 @@ function buildSearchReturn(args: {
 	inlineContent?: Array<{ url: string; title: string; content: string; error: string | null }>;
 }): AgentToolResult<{ queries: string[]; queryCount: number; successfulQueries: number; totalResults: number; urls: string[] }> {
 	const { queryList, results, urls, includeContent, inlineContent } = args;
-	const successful = results.filter((r) => !r.error).length;
+	const successful = results.filter((r) => r.error === null).length;
 	let output = "";
 	const duplicateQueries = duplicateQuerySet(results);
 
 	for (const r of results) {
 		output += formatQueryHeader(r.query, r.provider, duplicateQueries);
-		if (r.error) output += `Error: ${r.error}\n\n`;
+		if (r.error !== null) output += `Error: ${r.error}\n\n`;
 		else output += formatSearchSummary(r.results, r.answer) + "\n\n";
 	}
 
 	if (includeContent && inlineContent?.length) {
 		output += "---\n\n## Fetched Content\n\n";
 		for (const item of inlineContent) {
-			if (item.error) {
+			if (item.error !== null) {
 				output += `### ${item.url}\n\nError: ${item.error}\n\n`;
 				continue;
 			}
@@ -176,13 +176,16 @@ function buildSearchReturn(args: {
 		}
 	}
 
-	return textResult(output.trim(), {
-		queries: queryList,
-		queryCount: queryList.length,
-		successfulQueries: successful,
-		totalResults: results.reduce((sum, r) => sum + r.results.length, 0),
-		urls,
-	});
+	return {
+		...textResult(output.trim(), {
+			queries: queryList,
+			queryCount: queryList.length,
+			successfulQueries: successful,
+			totalResults: results.reduce((sum, r) => sum + r.results.length, 0),
+			urls,
+		}),
+		...(successful === 0 ? { isError: true } : {}),
+	};
 }
 
 export default function webAccessLean(pi: ExtensionAPI) {
@@ -250,7 +253,7 @@ export default function webAccessLean(pi: ExtensionAPI) {
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const queryList = normalizeSearchQueries(params);
 			if (queryList.length === 0) {
-				return textResult("Error: No query provided.", { error: "No query provided" });
+				return { ...textResult("Error: No query provided.", { error: "No query provided" }), isError: true };
 			}
 
 			const searchResults: QueryResultData[] = [];
@@ -352,15 +355,15 @@ export default function webAccessLean(pi: ExtensionAPI) {
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const urlList = normalizeFetchUrls(params);
 			if (urlList.length === 0) {
-				return { content: [{ type: "text", text: "Error: No URL provided." }], details: { error: "No URL provided" } };
+				return { content: [{ type: "text", text: "Error: No URL provided. Use 'url' or 'urls'." }], details: { error: "No URL provided" }, isError: true };
 			}
 			onUpdate?.({ content: [{ type: "text", text: `Fetching ${urlList.length} URL(s)...` }], details: { phase: "fetch", progress: 0 } });
 			const results = await fetchAllContent(urlList, signal, { forceClone: typeof params.forceClone === "boolean" ? params.forceClone : undefined });
-			const successful = results.filter((r) => !r.error).length;
+			const successful = results.filter((r) => r.error === null).length;
 
 			if (urlList.length === 1) {
 				const r = results[0];
-				if (r.error) return { content: [{ type: "text", text: `Error: ${r.error}` }], details: { urls: urlList, successful: 0, error: r.error } };
+				if (r.error !== null) return { content: [{ type: "text", text: `Error: ${r.error}` }], details: { urls: urlList, successful: 0, error: r.error }, isError: true };
 				const truncated = r.content.length > MAX_INLINE_CONTENT;
 				const text = truncated ? r.content.slice(0, MAX_INLINE_CONTENT) + "\n\n[Content truncated]" : r.content;
 				return { content: [{ type: "text", text }], details: { urls: urlList, successful: 1, title: r.title, totalChars: r.content.length, truncated } };
@@ -368,10 +371,10 @@ export default function webAccessLean(pi: ExtensionAPI) {
 
 			let output = "## Fetched URLs\n\n";
 			for (const r of results) {
-				if (r.error) output += `- ${r.url}: Error - ${r.error}\n`;
+				if (r.error !== null) output += `- ${r.url}: Error - ${r.error}\n`;
 				else output += `## ${r.title || r.url}\n${r.url}\n\n${r.content.length > MAX_INLINE_CONTENT ? r.content.slice(0, MAX_INLINE_CONTENT) + "\n\n[Content truncated]" : r.content}\n\n`;
 			}
-			return { content: [{ type: "text", text: output.trim() }], details: { urls: urlList, successful, urlCount: urlList.length } };
+			return { content: [{ type: "text", text: output.trim() }], details: { urls: urlList, successful, urlCount: urlList.length }, ...(successful === 0 ? { isError: true } : {}) };
 		},
 		renderCall(args, theme) {
 			const urlList = normalizeFetchUrls(args);
