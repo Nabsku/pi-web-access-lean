@@ -9,6 +9,7 @@ import { extractPDFToMarkdown, isPDF } from "./pdf-extract.ts";
 import { extractGitHub, type GitHubCloneSession } from "./github-extract.ts";
 export { createGitHubCloneSession, disposeGitHubCloneSession } from "./github-extract.ts";
 import { fetchRemoteUrl } from "./ssrf-protection.ts";
+import { sanitizeInlineDataUris } from "./data-uri-sanitize.ts";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const CONCURRENT_LIMIT = 3;
@@ -36,6 +37,11 @@ const turndown = new TurndownService({
 	headingStyle: "atx",
 	codeBlockStyle: "fenced",
 });
+
+const sanitizedTurndown = new TurndownService(turndown.options);
+const escapeMarkdown = sanitizedTurndown.escape.bind(sanitizedTurndown);
+// Turndown bypasses this hook for literal inline/fenced code.
+sanitizedTurndown.escape = text => sanitizeInlineDataUris(escapeMarkdown(text), true);
 
 const fetchLimit = pLimit(CONCURRENT_LIMIT);
 
@@ -303,7 +309,7 @@ async function extractViaHttp(
 
 		if (!article?.content) {
 			const rscResult = extractRSCContent(text);
-			if (rscResult) {
+			if (rscResult && rscResult.content.length >= MIN_USEFUL_CONTENT) {
 				activityMonitor.logComplete(activityId, response.status);
 				return { url, title: rscResult.title, content: rscResult.content, error: null };
 			}
@@ -330,6 +336,13 @@ async function extractViaHttp(
 		const markdown = turndown.turndown(article.content);
 		activityMonitor.logComplete(activityId, response.status);
 
+		if (markdown.length < MIN_USEFUL_CONTENT) {
+			const rscResult = extractRSCContent(text);
+			if (rscResult && rscResult.content.length >= MIN_USEFUL_CONTENT) {
+				return { url, title: rscResult.title, content: rscResult.content, error: null };
+			}
+		}
+
 		if (markdown.length < MIN_USEFUL_CONTENT && isLikelyJSRendered(text)) {
 			return {
 				url,
@@ -339,7 +352,8 @@ async function extractViaHttp(
 			};
 		}
 
-		return { url, title: article.title || "", content: markdown, error: null };
+		const content = /data:/i.test(markdown) ? sanitizedTurndown.turndown(article.content) : markdown;
+		return { url, title: article.title || "", content, error: null };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (message.toLowerCase().includes("abort")) {
@@ -371,5 +385,8 @@ export async function fetchAllContent(
 	options?: ExtractOptions,
 	cloneSession?: GitHubCloneSession,
 ): Promise<ExtractedContent[]> {
-	return Promise.all(urls.map((url) => fetchLimit(() => extractContent(url, signal, options, cloneSession))));
+	return Promise.all(urls.map((url) => fetchLimit(async () => {
+		const result = await extractContent(url, signal, options, cloneSession);
+		return { ...result, title: sanitizeInlineDataUris(result.title), content: sanitizeInlineDataUris(result.content) };
+	})));
 }
