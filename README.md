@@ -19,7 +19,7 @@ The original extension includes the broader feature set: web search, content ext
 - `fetch_content`: readable markdown extraction for URLs
 - GitHub repository handling: clone repositories locally instead of scraping rendered HTML
 - PDF extraction: extract text PDFs and save markdown output
-- HTML extraction: Readability, Next.js RSC parsing, and Jina Reader fallback
+- HTML extraction: Readability, Next.js RSC parsing, and Cloudflare challenge detection
 - Activity widget for request/response visibility
 
 ## Design
@@ -238,10 +238,15 @@ web_search(query)
 fetch_content(url)
   → GitHub URL? clone repository or use GitHub API fallback
   → HTTP fetch
+      → Cloudflare challenge? report failure
       → PDF? extract text, save markdown to ~/Downloads/
-      → HTML? Readability → RSC parser → Jina Reader fallback
+      → HTML? Readability → RSC parser
       → text/json/markdown? return directly
 ```
+
+Challenge pages are reported as fetch failures, not returned as article content.
+This fork has no Jina Reader or other hosted page-extraction fallback. If direct
+extraction fails, use `web_search` for another source or open the page in a browser.
 
 ## Commands
 

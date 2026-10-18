@@ -211,6 +211,19 @@ async function extractViaHttp(
 			},
 		});
 
+		const challengeError = `HTTP ${response.status}: Blocked by Cloudflare challenge page`;
+		if (response.headers.get("cf-mitigated") === "challenge") {
+			try {
+				await response.body?.cancel();
+			} catch (cause) {
+				throw new Error(`${challengeError} Body cancellation failed.`, { cause });
+			} finally {
+				// Stream cancellation can leave the connection alive; abort the owned request too.
+				controller.abort();
+			}
+			throw new Error(challengeError);
+		}
+
 		if (!response.ok) {
 			activityMonitor.logComplete(activityId, response.status);
 			return {
@@ -275,6 +288,16 @@ async function extractViaHttp(
 		}
 
 		const { document } = parseHTML(text);
+		// Inspect actual bootstrap scripts, not quoted examples or embedded widgets.
+		if (/^Just a moment\.\.\.$/i.test(document.title.trim()) &&
+			Array.from(document.querySelectorAll("script:not([src])")).some(script => {
+				const type = script.getAttribute("type")?.trim() || "";
+				return (!type || /^(?:(?:text|application)\/javascript|module)$/i.test(type)) &&
+					script.textContent?.includes("window._cf_chl_opt") &&
+					script.textContent.includes("/cdn-cgi/challenge-platform/");
+			})) {
+			throw new Error(challengeError);
+		}
 		const reader = new Readability(document as unknown as Document);
 		const article = reader.parse();
 
