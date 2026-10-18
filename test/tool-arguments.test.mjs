@@ -88,7 +88,7 @@ test("empty fetch URLs return the existing error without loading extraction or d
 			const hook = registerHooks({ resolve(specifier, context, next) { if (specifier.endsWith("/extract.ts")) throw new Error("Empty fetch eagerly loaded extraction"); return next(specifier, context); } });
 			try { let updates = 0; const params = ${JSON.stringify(params)}; const result = await call("fetch_content", params, undefined, () => updates++); console.log(JSON.stringify({ result, updates, requests, rendered: render("fetch_content", params) })); } finally { hook.deregister(); }
 		`);
-		assert.deepEqual(found.result, { content: [{ type: "text", text: "Error: No URL provided." }], details: { error: "No URL provided" } });
+		assert.deepEqual(found.result, { content: [{ type: "text", text: "Error: No URL provided. Use 'url' or 'urls'." }], details: { error: "No URL provided" }, isError: true });
 		assert.equal(found.rendered, "fetch (no URL)");
 		assert.equal(found.updates, 0);
 		assert.deepEqual(found.requests, []);
@@ -161,7 +161,7 @@ test("empty singular JSON arrays and empty plural precedence start no search or 
 	for (const params of [{ query: "[]" }, { query: '["  ", ""]' }, { query: "ignored", queries: [] }]) await t.test(JSON.stringify(params), async t => {
 		const f = await fixture(t);
 		const found = f.run(`const params = ${JSON.stringify(params)}; console.log(JSON.stringify({ result: await call("web_search", params), rendered: render("web_search", params), requests }));`);
-		assert.deepEqual(found.result, { content: [{ type: "text", text: "Error: No query provided." }], details: { error: "No query provided" } });
+		assert.deepEqual(found.result, { content: [{ type: "text", text: "Error: No query provided." }], details: { error: "No query provided" }, isError: true });
 		assert.equal(found.rendered, "search (no query)");
 		assert.deepEqual(found.requests, []);
 		assert.deepEqual(f.commands(), []);
