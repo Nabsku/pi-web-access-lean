@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Key, Text, type KeyId } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai/compat";
 import type { ExtractedContent, ExtractOptions } from "./extract.ts";
@@ -7,7 +8,7 @@ import { search, type SearchProvider } from "./search.ts";
 import { executeCodeSearch } from "./code-search.ts";
 import type { SearchResult } from "./perplexity.ts";
 import { activityMonitor, type ActivityEntry } from "./activity.ts";
-import { isAbortError } from "./utils.ts";
+import { getWebSearchConfigPath, isAbortError, parseConfigRoot } from "./utils.ts";
 import { createCredentialSafeCancellation } from "./credential-source.ts";
 import { sanitizeInlineDataUris } from "./data-uri-sanitize.ts";
 
@@ -20,9 +21,6 @@ function truncateInlineContent(content: string): string {
 	if (high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff) end--;
 	return content.slice(0, end) + "\n\n[Content truncated]";
 }
-
-let widgetVisible = false;
-let widgetUnsubscribe: (() => void) | null = null;
 
 let extractModulePromise: Promise<typeof import("./extract.ts")> | undefined;
 
@@ -143,6 +141,33 @@ function updateActivityWidget(ctx: ExtensionContext): void {
 	ctx.ui.setWidget("web-activity", lines);
 }
 
+function getActivityShortcut(): KeyId {
+	const configPath = getWebSearchConfigPath();
+	let config: Record<string, unknown>;
+	try {
+		config = parseConfigRoot(readFileSync(configPath, "utf-8"));
+	} catch (err) {
+		if (err instanceof Error && "code" in err && err.code === "ENOENT") return "ctrl+shift+w";
+		const message = err instanceof SyntaxError ? "invalid JSON" : err instanceof Error ? err.message : String(err);
+		throw new Error(`Failed to parse ${configPath}: ${message}`);
+	}
+	const shortcuts = config.shortcuts;
+	if (shortcuts === undefined) return "ctrl+shift+w";
+	if (!shortcuts || typeof shortcuts !== "object" || Array.isArray(shortcuts)) {
+		throw new Error(`Failed to parse ${configPath}: shortcuts must be an object`);
+	}
+	const activity = (shortcuts as Record<string, unknown>).activity;
+	if (activity === undefined) return "ctrl+shift+w";
+	const parts = typeof activity === "string" ? /^((?:(?:ctrl|shift|alt|super)\+)*)(.+)$/.exec(activity) : null;
+	const modifiers = parts?.[1].split("+").filter(Boolean) ?? [];
+	const key = parts?.[2] ?? "";
+	if (!parts || new Set(modifiers).size !== modifiers.length ||
+		!(/^[a-z0-9]$/.test(key) || Object.values(Key).some(value => typeof value === "string" && value === key))) {
+		throw new Error(`Failed to parse ${configPath}: shortcuts.activity must be a Pi key identifier, e.g. alt+w`);
+	}
+	return activity as KeyId;
+}
+
 function duplicateQuerySet(results: QueryResultData[]): Set<string> {
 	const counts = new Map<string, number>();
 	for (const result of results) counts.set(result.query, (counts.get(result.query) ?? 0) + 1);
@@ -198,8 +223,22 @@ function buildSearchReturn(args: {
 }
 
 export default function webAccessLean(pi: ExtensionAPI) {
+	const activityShortcut = getActivityShortcut();
+	let widgetVisible = false;
+	let widgetUnsubscribe: (() => void) | null = null;
 	const newSession = () => ({ controller: new AbortController(), clones: undefined as ReturnType<typeof import("./extract.ts").createGitHubCloneSession> | undefined });
 	let session = newSession();
+
+	function resetActivityWidget(ctx: ExtensionContext): void {
+		// Detach before clear() notifies listeners with the old context.
+		widgetUnsubscribe?.();
+		widgetUnsubscribe = null;
+		activityMonitor.clear();
+		if (widgetVisible) {
+			widgetUnsubscribe = activityMonitor.onUpdate(() => updateActivityWidget(ctx));
+			updateActivityWidget(ctx);
+		}
+	}
 
 	async function endSession(): Promise<void> {
 		const previous = session;
@@ -210,11 +249,25 @@ export default function webAccessLean(pi: ExtensionAPI) {
 		}
 	}
 
-	pi.on("session_start", async () => {
-		await endSession();
-		session = newSession();
+	pi.on("session_start", async (_event, ctx) => {
+		try {
+			resetActivityWidget(ctx);
+		} finally {
+			await endSession();
+			session = newSession();
+		}
 	});
-	pi.on("session_shutdown", endSession);
+	pi.on("session_tree", (_event, ctx) => resetActivityWidget(ctx));
+	pi.on("session_shutdown", async (_event, ctx) => {
+		const wasVisible = widgetVisible;
+		widgetVisible = false;
+		try {
+			resetActivityWidget(ctx);
+			if (wasVisible) ctx.ui.setWidget("web-activity", undefined);
+		} finally {
+			await endSession();
+		}
+	});
 
 	async function fetchAllContent(urls: string[], signal?: AbortSignal, options?: ExtractOptions): Promise<ExtractedContent[]> {
 		const current = session;
@@ -229,7 +282,7 @@ export default function webAccessLean(pi: ExtensionAPI) {
 		return urls.map((url) => ({ url, title: "", content: "", error: "Aborted" }));
 	}
 
-	pi.registerShortcut("ctrl+shift+w", {
+	pi.registerShortcut(activityShortcut, {
 		description: "Toggle web search activity",
 		handler: async (ctx) => {
 			widgetVisible = !widgetVisible;
@@ -390,10 +443,14 @@ export default function webAccessLean(pi: ExtensionAPI) {
 			const label = urlList.length === 1 ? urlList[0] : `${urlList.length} URLs`;
 			return new Text(theme.fg("toolTitle", theme.bold("fetch ")) + theme.fg("accent", urlList.length ? label : "(no URL)"), 0, 0);
 		},
-		renderResult(result, _opts, theme) {
+		renderResult(result, { isPartial }, theme) {
+			if (isPartial) {
+				const update = result.content[0];
+				return new Text(theme.fg("accent", update?.type === "text" && update.text ? update.text : "Fetching..."), 0, 0);
+			}
 			const details = result.details as { error?: string; successful?: number; urlCount?: number; title?: string; totalChars?: number };
 			if (details?.error) return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
-			if (details?.urlCount && details.urlCount > 1) return new Text(theme.fg("success", `${details.successful}/${details.urlCount} URLs`), 0, 0);
+			if (details?.urlCount && details.urlCount > 1) return new Text(theme.fg((details.successful ?? 0) > 0 ? "success" : "error", `${details.successful}/${details.urlCount} URLs`), 0, 0);
 			return new Text(theme.fg("success", details?.title || "content fetched") + theme.fg("muted", ` (${details?.totalChars ?? 0} chars)`), 0, 0);
 		},
 	});
