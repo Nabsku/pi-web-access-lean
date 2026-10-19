@@ -1,3 +1,23 @@
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+let cachedWebSearchConfigPath: string | undefined;
+
+export function getWebSearchConfigPath(): string {
+	if (cachedWebSearchConfigPath) return cachedWebSearchConfigPath;
+	const explicitDir = process.env.PI_CODING_AGENT_DIR;
+	if (explicitDir) return cachedWebSearchConfigPath = join(explicitDir, "web-search.json");
+
+	const legacyPath = join(homedir(), ".pi", "web-search.json");
+	const xdgConfigHome = process.env.XDG_CONFIG_HOME;
+	const preferredPath = xdgConfigHome
+		? join(xdgConfigHome, "pi", "web-search.json")
+		: join(homedir(), ".pi", "agent", "web-search.json");
+	cachedWebSearchConfigPath = existsSync(preferredPath) ? preferredPath : existsSync(legacyPath) ? legacyPath : preferredPath;
+	return cachedWebSearchConfigPath;
+}
+
 export function parseConfigRoot(raw: string): Record<string, unknown> {
 	const parsed: unknown = JSON.parse(raw);
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {

@@ -36,7 +36,7 @@ process.stdout.write(Buffer.from("config fixture file").toString("base64"));
 		run(script, env = {}) {
 			const child = spawnSync(process.execPath, ["--input-type=module"], {
 				encoding: "utf8",
-				env: { HOME: home, USERPROFILE: home, PATH: bin, PI_CODING_AGENT_DIR: join(home, "agent"), ...env },
+				env: { HOME: home, USERPROFILE: home, PATH: bin, PI_CODING_AGENT_DIR: join(home, ".pi"), ...env },
 				input: `
 					import { existsSync } from "node:fs";
 					import { inspect } from "node:util";

@@ -1,10 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { isPerplexityAvailable, searchWithPerplexity, type SearchResponse, type SearchOptions } from "./perplexity.ts";
 import { isExaAvailable, searchWithExa } from "./exa.ts";
 import { createCredentialSafeCancellation, CredentialResolutionError } from "./credential-source.ts";
-import { isAbortError, parseConfigRoot } from "./utils.ts";
+import { getWebSearchConfigPath, isAbortError, parseConfigRoot } from "./utils.ts";
 
 export type SearchProvider = "auto" | "perplexity" | "exa";
 export type ResolvedSearchProvider = Exclude<SearchProvider, "auto">;
@@ -13,7 +11,7 @@ export interface AttributedSearchResponse extends SearchResponse {
 	provider: ResolvedSearchProvider;
 }
 
-const CONFIG_PATH = join(homedir(), ".pi", "web-search.json");
+const CONFIG_PATH = getWebSearchConfigPath();
 let cachedSearchConfig: { searchProvider: SearchProvider } | null = null;
 
 function getSearchConfig(): { searchProvider: SearchProvider } {
@@ -111,5 +109,5 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		throw new Error(`Auto provider search failed:\n  - ${fallbackErrors.join("\n  - ")}`);
 	}
 
-	throw new Error("No search provider available. Set EXA_API_KEY/exaApiKey or perplexityApiKey in ~/.pi/web-search.json");
+	throw new Error(`No search provider available. Set EXA_API_KEY/exaApiKey or perplexityApiKey in ${CONFIG_PATH}`);
 }

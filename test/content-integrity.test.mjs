@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 
 const home = await mkdtemp(join(tmpdir(), "pi-content-integrity-"));
-const environment = { HOME: home, USERPROFILE: home, EXA_API_KEY: "synthetic-integrity-key", PERPLEXITY_API_KEY: "", PI_CODING_AGENT_DIR: join(home, "agent") };
+const environment = { HOME: home, USERPROFILE: home, EXA_API_KEY: "synthetic-integrity-key", PERPLEXITY_API_KEY: "", PI_CODING_AGENT_DIR: join(home, ".pi") };
 const previous = Object.fromEntries(Object.keys(environment).map(key => [key, process.env[key]]));
 Object.assign(process.env, environment);
 after(async () => {

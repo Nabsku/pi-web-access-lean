@@ -1,17 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
 import type { SearchOptions, SearchResponse } from "./perplexity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import { parseConfigRoot } from "./utils.ts";
+import { getWebSearchConfigPath, parseConfigRoot } from "./utils.ts";
 
 const EXA_SEARCH_URL = "https://api.exa.ai/search";
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 const EXA_MCP_ADVANCED_TOOL = "web_search_advanced_exa";
 const EXA_MCP_BASIC_TOOL = "web_search_exa";
-const CONFIG_PATH = join(homedir(), ".pi", "web-search.json");
+const CONFIG_PATH = getWebSearchConfigPath();
 
 interface WebSearchConfig {
 	exaApiKey?: unknown;

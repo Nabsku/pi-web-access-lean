@@ -10,8 +10,8 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 
 const home = await mkdtemp(join(tmpdir(), "pi-content-http-"));
-const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
-process.env.HOME = home; process.env.USERPROFILE = home;
+const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR };
+process.env.HOME = home; process.env.USERPROFILE = home; process.env.PI_CODING_AGENT_DIR = join(home, ".pi");
 after(async () => {
 	for (const [key, value] of Object.entries(previous)) {
 		if (value === undefined) delete process.env[key];

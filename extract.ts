@@ -82,10 +82,11 @@ export async function extractContent(
 		if (signal?.aborted) return abortedResult(url);
 	} catch (err) {
 		const message = errorMessage(err);
-		if (isAbortError(err)) return abortedResult(url);
+		if (signal?.aborted) return abortedResult(url);
 		if (isConfigParseError(err)) {
 			return { url, title: "", content: "", error: message };
 		}
+		if (isAbortError(err)) return abortedResult(url);
 	}
 
 	if (signal?.aborted) return abortedResult(url);

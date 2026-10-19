@@ -8,6 +8,8 @@ import { test } from "node:test";
 import { parseGitHubUrl } from "../github-extract.ts";
 
 const extractModuleUrl = new URL("../github-extract.ts", import.meta.url).href;
+// Poll persistent flags directly: directory events and initial stat baselines can miss them.
+const POLL_MS = 25;
 
 test("githubClone.enabled false skips GitHub clone/API specialization", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-github-disabled-"));
@@ -25,7 +27,7 @@ test("githubClone.enabled false skips GitHub clone/API specialization", async (t
 			console.log(JSON.stringify(await extractGitHub("https://github.com/owner/repo")));
 		`,
 		encoding: "utf8",
-		env: { ...process.env, HOME: home, USERPROFILE: home },
+		env: { ...process.env, HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: join(home, ".pi") },
 	});
 
 	assert.equal(child.status, 0, child.stderr);
@@ -90,8 +92,8 @@ fs.appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({ tool, args
 if (tool === "gh" && args[0] === "--version") {
 	if (process.env.GITHUB_FIXTURE_WAIT_VERSION === "1") {
 		const release = path.join(root, "availability-release");
-		const finish = () => { if (fs.existsSync(release)) { watcher.close(); process.exit(0); } };
-		const watcher = fs.watch(root, finish);
+		const finish = () => { if (fs.existsSync(release)) { clearInterval(timer); process.exit(0); } };
+		const timer = setInterval(finish, ${POLL_MS});
 		fs.writeFileSync(path.join(root, "availability-started"), "started");
 		finish();
 		return;
@@ -140,7 +142,7 @@ function runCloneFixture(t, fixture, source) {
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
 		input: `
 			import assert from "node:assert/strict";
-			import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, watch, writeFileSync } from "node:fs";
+			import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 			import { isAbsolute, join, relative, resolve, sep } from "node:path";
 			const { parseGitHubUrl, extractGitHub, clearCloneCache } = await import(${JSON.stringify(extractModuleUrl)});
 			globalThis.fetch = async () => { throw new Error("Network disabled in clone fixture"); };
@@ -300,18 +302,21 @@ test("cache-root API fallback does not report success after caller cancellation"
 	const observed = runCloneFixture(t, fixture, `
 		const { activityMonitor } = await import(${JSON.stringify(new URL("../activity.ts", import.meta.url).href)});
 		const controller = new AbortController();
-		const watcher = watch(root, () => {
-			if (existsSync(join(root, "availability-started"))) {
+		const ready = join(root, "availability-started");
+		const onReady = () => {
+			if (existsSync(ready)) {
 				controller.abort();
 				writeFileSync(join(root, "availability-release"), "released");
-				watcher.close();
+				clearInterval(readinessTimer);
 			}
-		});
+		};
+		const readinessTimer = setInterval(onReady, ${POLL_MS});
+		onReady();
 		let result;
 		try {
 			result = await extractGitHub("https://github.com/owner/repo", controller.signal, true);
 		} finally {
-			watcher.close();
+			clearInterval(readinessTimer);
 		}
 		console.log(JSON.stringify({ aborted: controller.signal.aborted, cancelledResult: result === null, status: activityMonitor.getEntries().at(-1).status }));
 	`);

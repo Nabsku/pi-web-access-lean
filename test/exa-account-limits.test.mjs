@@ -42,7 +42,7 @@ async function fixture(t, legacy, config = { exaApiKey: key, perplexityApiKey: "
 		run(script, env = {}) {
 			const child = spawnSync(process.execPath, ["--input-type=module"], {
 				encoding: "utf8",
-				env: { HOME: home, USERPROFILE: home, PATH: dirname(process.execPath), PI_CODING_AGENT_DIR: join(home, "agent"), ...env },
+				env: { HOME: home, USERPROFILE: home, PATH: dirname(process.execPath), PI_CODING_AGENT_DIR: join(home, ".pi"), ...env },
 				input: `
 					const load = name => import(new URL(name + ".ts", ${JSON.stringify(source)}));
 					const key = ${JSON.stringify(key)};
