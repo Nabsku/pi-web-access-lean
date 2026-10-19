@@ -2,6 +2,7 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 import pLimit from "p-limit";
+import { existsSync, readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { MIMEType } from "node:util";
 import { activityMonitor } from "./activity.ts";
@@ -11,15 +12,42 @@ import { extractGitHub, type GitHubCloneSession } from "./github-extract.ts";
 export { createGitHubCloneSession, disposeGitHubCloneSession } from "./github-extract.ts";
 import { fetchRemoteUrl } from "./ssrf-protection.ts";
 import { sanitizeInlineDataUris } from "./data-uri-sanitize.ts";
+import { getWebSearchConfigPath, parseConfigRoot } from "./utils.ts";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const CONCURRENT_LIMIT = 3;
+const CONFIG_PATH = getWebSearchConfigPath();
+const DEFAULT_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+let cachedUserAgent: string | undefined;
 
 const NON_RECOVERABLE_ERRORS = ["Unsupported content type", "Response too large", "Blocked fetch target"];
 const MIN_USEFUL_CONTENT = 500;
 
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
+}
+
+function loadFetchContentUserAgent(): string {
+	if (cachedUserAgent !== undefined) return cachedUserAgent;
+	if (!existsSync(CONFIG_PATH)) return cachedUserAgent = DEFAULT_USER_AGENT;
+
+	const raw = readFileSync(CONFIG_PATH, "utf-8");
+	try {
+		const fetchContent = parseConfigRoot(raw).fetchContent;
+		if (fetchContent === undefined || fetchContent === null) return cachedUserAgent = DEFAULT_USER_AGENT;
+		if (typeof fetchContent !== "object" || Array.isArray(fetchContent)) {
+			throw new Error("fetchContent must be a JSON object");
+		}
+		const userAgent = (fetchContent as Record<string, unknown>).userAgent;
+		if (userAgent === undefined || userAgent === null) return cachedUserAgent = DEFAULT_USER_AGENT;
+		if (typeof userAgent !== "string" || !userAgent.trim() || !/^[\t\x20-\x7e]+$/.test(userAgent)) {
+			throw new Error("fetchContent.userAgent must be a non-empty string of printable ASCII characters or horizontal tabs");
+		}
+		return cachedUserAgent = userAgent.trim();
+	} catch (err) {
+		const message = err instanceof SyntaxError ? "invalid JSON" : errorMessage(err);
+		throw new Error(`Failed to parse ${CONFIG_PATH}: ${message}`);
+	}
 }
 
 function isConfigParseError(err: unknown): boolean {
@@ -96,6 +124,7 @@ export async function extractContent(
 
 	if (signal?.aborted) return abortedResult(url);
 	if (!httpResult.error) return httpResult;
+	if (isConfigParseError(httpResult.error)) return httpResult;
 	if (NON_RECOVERABLE_ERRORS.some(prefix => httpResult.error!.startsWith(prefix))) return httpResult;
 
 	const guidance = [
@@ -214,7 +243,7 @@ async function extractViaHttp(
 		const response = await fetchRemoteUrl(url, {
 			signal: controller.signal,
 			headers: {
-				"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+				"User-Agent": loadFetchContentUserAgent(),
 				"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
 				"Accept-Language": "en-US,en;q=0.9",
 				"Cache-Control": "no-cache",

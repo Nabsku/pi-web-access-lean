@@ -110,6 +110,9 @@ environment references still resolve at request time. All fields are optional.
   "exaApiKey": "exa-...",
   "perplexityApiKey": "pplx-...",
   "provider": "auto",
+  "fetchContent": {
+    "userAgent": "OpenAI File Downloader, XaiImageApiFetch/1.0"
+  },
   "githubClone": {
     "enabled": true,
     "maxRepoSizeMB": 350,
@@ -121,6 +124,19 @@ environment references still resolve at request time. All fields are optional.
   }
 }
 ```
+
+`fetchContent.userAgent` explicitly sets the `User-Agent` on this extension's
+direct HTTP page requests, including HTML, text, PDF, redirects and pages fetched
+by `web_search` with `includeContent`. The example opts into upstream's alternate
+UA; omitting the setting or using `null` keeps the existing Chrome/122 browser
+UA. It does not change search-provider API requests or GitHub API/clone traffic.
+
+The value must be a nonempty string containing only printable ASCII or horizontal
+tabs; surrounding spaces/tabs are trimmed. Invalid settings fail the page fetch
+with a config-path/field error before any page request. Settings are cached, so
+restart Pi after editing. There is no automatic retry with a different UA:
+some sites reject particular identifiers, and changing one does not establish
+verified-bot identity or guarantee access.
 
 Provider selection:
 
