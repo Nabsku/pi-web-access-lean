@@ -20,9 +20,23 @@ test("extractPDFToMarkdown works on Node 22 without native Promise.try", () => {
   assert.match(child.stdout, /Hello PDF/);
 });
 
-function buildChildScript(moduleUrl) {
+for (const count of [1, 2]) {
+  test(`PDF extraction survives unavailable package self-resolution with ${count} cold document(s)`, () => {
+    const child = spawnSync(process.execPath, ["--input-type=module"], {
+      input: buildChildScript(extractorUrl, { blockSelfResolution: true, count }),
+      encoding: "utf8",
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    assert.equal(child.status, 0, `${child.error ?? ""}\n${child.stdout}\n${child.stderr}`);
+    assert.match(child.stdout, /Hello PDF 0/);
+    if (count === 2) assert.match(child.stdout, /Hello PDF 1/);
+  });
+}
+
+function buildChildScript(moduleUrl, { blockSelfResolution = false, count = 1 } = {}) {
   return `
-    import { mkdtemp, readFile } from "node:fs/promises";
+    import { mkdtemp, readFile, rm } from "node:fs/promises";
+    import { register } from "node:module";
     import { tmpdir } from "node:os";
     import { join } from "node:path";
 
@@ -40,16 +54,27 @@ function buildChildScript(moduleUrl) {
       throw new Error("Expected Promise.try to be unavailable before PDF extraction");
     }
 
+    if (${blockSelfResolution}) {
+      const loader = 'export async function resolve(s, c, next) {' +
+        'if (s === "unpdf/pdfjs" && c.parentURL.includes("/node_modules/unpdf/")) {' +
+        'throw new Error("Host cannot resolve unpdf package self-reference (fixture)"); }' +
+        'return next(s, c); }';
+      register("data:text/javascript," + encodeURIComponent(loader), import.meta.url);
+    }
+
     const { extractPDFToMarkdown } = await import(${JSON.stringify(moduleUrl)});
 
     const outputDir = await mkdtemp(join(tmpdir(), "pi-web-access-pdf-"));
-    const result = await extractPDFToMarkdown(
-      makePdf("Hello PDF"),
-      "https://example.test/hello.pdf",
-      { outputDir },
-    );
-
-    console.log(await readFile(result.outputPath, "utf8"));
+    try {
+      const results = await Promise.all(Array.from({ length: ${count} }, (_, i) => extractPDFToMarkdown(
+        makePdf("Hello PDF " + i),
+        "https://example.test/hello-" + i + ".pdf",
+        { outputDir, filename: "hello-" + i + ".md" },
+      )));
+      for (const result of results) console.log(await readFile(result.outputPath, "utf8"));
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
 
     function makePdf(text) {
       const content = "BT /F1 24 Tf 72 720 Td (" + text + ") Tj ET";
