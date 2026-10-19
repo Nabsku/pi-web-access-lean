@@ -35,6 +35,8 @@ async function getUnpdf() {
     import("unpdf"),
     import("unpdf/pdfjs"),
   ]);
+  // Reuse our resolved bundle instead of relying on the host's package self-resolution.
+  await unpdf.definePDFJSModule(async () => pdfjs);
   const { VerbosityLevel } = pdfjs as typeof pdfjs & { VerbosityLevel: { ERRORS: number } };
   return { getDocumentProxy: unpdf.getDocumentProxy, VerbosityLevel };
 }
