@@ -2,6 +2,7 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 import pLimit from "p-limit";
+import { performance } from "node:perf_hooks";
 import { MIMEType } from "node:util";
 import { activityMonitor } from "./activity.ts";
 import { extractRSCContent } from "./rsc-extract.ts";
@@ -197,7 +198,14 @@ async function extractViaHttp(
 	const activityId = activityMonitor.logStart({ type: "fetch", url });
 
 	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+	const startedAt = performance.now();
+	let activityError: string | undefined;
+	// Challenge handling also aborts this controller without expiring the deadline.
+	let timedOut = false;
+	const timeoutId = setTimeout(() => {
+		timedOut = true;
+		controller.abort();
+	}, timeoutMs);
 
 	const onAbort = () => controller.abort();
 	signal?.addEventListener("abort", onAbort);
@@ -265,7 +273,7 @@ async function extractViaHttp(
 				};
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
-				activityMonitor.logError(activityId, message);
+				activityError = message;
 				return { url, title: "", content: "", error: `PDF extraction failed: ${message}` };
 			}
 		}
@@ -360,12 +368,20 @@ async function extractViaHttp(
 		if (message.toLowerCase().includes("abort")) {
 			activityMonitor.logComplete(activityId, 0);
 		} else {
-			activityMonitor.logError(activityId, message);
+			activityError = message;
 		}
 		return { url, title: "", content: "", error: message };
 	} finally {
 		clearTimeout(timeoutId);
 		signal?.removeEventListener("abort", onAbort);
+		// Imports and CPU work can finish before an overdue timer gets a turn.
+		const callerAborted = signal?.aborted;
+		if (callerAborted || timedOut || performance.now() - startedAt >= timeoutMs) {
+			controller.abort();
+			activityMonitor.logComplete(activityId, 0);
+			return callerAborted ? abortedResult(url) : { url, title: "", content: "", error: "The operation was aborted." };
+		}
+		if (activityError !== undefined) activityMonitor.logError(activityId, activityError);
 	}
 }
 
