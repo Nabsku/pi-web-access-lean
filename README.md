@@ -282,15 +282,20 @@ you need an omitted payload or truncated tail.
 
 ### Activity monitor
 
-Toggle with **Ctrl+Shift+W** to see live request/response activity:
+Toggle with **Ctrl+Shift+W** by default to see live request/response activity.
+Remap it with `shortcuts.activity` in the selected config file, using Pi key
+syntax such as `alt+w`, then restart Pi. Invalid shortcut settings are reported
+with the config path rather than silently ignored.
 
 ```text
-─── Web Search Activity ────────────────────────────────────
-  API  "typescript best practices"     200    2.1s ✓
-  GET  docs.example.com/article        200    0.8s ✓
-  GET  blog.example.com/post           404    0.3s ✗
-────────────────────────────────────────────────────────────
+── Web Search Activity ──
+  API typescript best practices 200
+  GET docs.example.com/article 200
+  GET blog.example.com/post 404
 ```
+
+Activity clears on session changes and tree navigation. The widget releases its
+live subscription on shutdown.
 
 ## Development
 
