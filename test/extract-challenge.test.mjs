@@ -11,7 +11,7 @@ const hostname = "challenge.example.test";
 const origin = "https://" + hostname;
 const home = await mkdtemp(join(tmpdir(), "pi-extract-challenge-"));
 const environment = {
-	HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: join(home, "agent"),
+	HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: join(home, ".pi"),
 	EXA_API_KEY: "synthetic-challenge-key", PERPLEXITY_API_KEY: "",
 };
 const previousEnvironment = Object.fromEntries(Object.keys(environment).map(key => [key, process.env[key]]));

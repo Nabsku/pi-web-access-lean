@@ -25,7 +25,7 @@ async function fixture(t, config = {}) {
 		run(script) {
 			const child = spawnSync(process.execPath, ["--input-type=module"], {
 				encoding: "utf8",
-				env: { HOME: home, USERPROFILE: home, PATH: bin, PI_CODING_AGENT_DIR: join(home, "agent") },
+				env: { HOME: home, USERPROFILE: home, PATH: bin, PI_CODING_AGENT_DIR: join(home, ".pi") },
 				input: `
 					const load = name => import(new URL(name + ".ts", ${JSON.stringify(source)}));
 					const requests = [];

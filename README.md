@@ -90,7 +90,20 @@ Requires Pi Coding Agent with extension support.
 
 ## Configuration
 
-Configuration is read from `~/.pi/web-search.json`. All fields are optional.
+The extension reads one `web-search.json`, selected in this order:
+
+- When `PI_CODING_AGENT_DIR` is set, use that directory even if its config file
+  is absent; do not fall back to another location.
+- Otherwise, when `XDG_CONFIG_HOME` is set, prefer an existing
+  `$XDG_CONFIG_HOME/pi/web-search.json`, then an existing legacy
+  `~/.pi/web-search.json`. If neither exists, use the XDG path for a new file.
+- With neither variable set, prefer an existing `~/.pi/agent/web-search.json`,
+  then an existing legacy `~/.pi/web-search.json`. If neither exists, use the
+  agent-directory path for a new file. Empty environment values count as unset.
+
+The selected path and parsed settings are cached for the running extension;
+restart Pi after editing configuration. Credential commands and explicit
+environment references still resolve at request time. All fields are optional.
 
 ```json
 {
@@ -220,6 +233,13 @@ URLs are trimmed and deduplicated in input order. Nonblank `urls` takes preceden
 an empty or all-blank list falls back to `url`. Execution and call rendering agree.
 
 GitHub clones use private per-session directories inside `githubClone.clonePath`.
+Before filesystem use, that path expands a leading `~` or `~/` to the home
+directory and substitutes `$NAME` environment variables, including values with
+spaces. Unknown variables and `${NAME}` remain literal. Inserted home paths and
+variable values are not expanded again. This is not shell evaluation: command
+substitutions are not executed. Set referenced variables or use an absolute
+path if a literal variable name is not intended.
+
 Requests in the same session reuse a repository/ref checkout, and `/tree` keeps it.
 Closing or replacing the session (new, resume, fork, or reload) removes only its own
 clones. Paths in old transcripts can expire; call `fetch_content` again to refresh them.

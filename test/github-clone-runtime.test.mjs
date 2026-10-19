@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, watch } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,6 +8,8 @@ import { test } from "node:test";
 
 const extractModuleUrl = new URL("../github-extract.ts", import.meta.url).href;
 const indexModuleUrl = new URL("../index.ts", import.meta.url).href;
+// Poll persistent flags directly: directory events and initial stat baselines can miss them.
+const POLL_MS = 25;
 
 async function fixture(t, route) {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "pi-github-runtime-")));
@@ -71,22 +73,24 @@ fs.writeFileSync(temporary, JSON.stringify({ ...identity, destination }));
 fs.renameSync(temporary, ready);
 if (process.env.RUNTIME_FIXTURE_FAIL === "1") process.exit(1);
 if (process.env.RUNTIME_FIXTURE_HOLD === "1") {
-	const check = () => { if (fs.existsSync(path.join(root, "release-" + instance))) { watcher.close(); process.exit(0); } };
-	const watcher = fs.watch(root, check);
+	const release = path.join(root, "release-" + instance);
+	const check = () => { if (fs.existsSync(release)) { clearInterval(timer); process.exit(0); } };
+	const timer = setInterval(check, ${POLL_MS});
 	check();
 }
 `;
 	await Promise.all(["gh", "git"].map((name) => writeFile(join(root, "bin", name), executable, { mode: 0o755 })));
 	const runnerPath = join(root, "runner.mjs");
 	await writeFile(runnerPath, `
-		import { existsSync, readFileSync, watch, writeFileSync } from "node:fs";
+		import { existsSync, readFileSync, writeFileSync } from "node:fs";
 		import fs from "node:fs/promises";
 		import { join } from "node:path";
 		import { registerHooks, syncBuiltinESMExports } from "node:module";
 		const root = process.env.RUNTIME_FIXTURE_ROOT;
 		const waitFor = (name) => new Promise((resolve) => {
-			const check = () => { if (existsSync(join(root, name))) { watcher.close(); resolve(); } };
-			const watcher = watch(root, check);
+			const path = join(root, name);
+			const check = () => { if (existsSync(path)) { clearInterval(timer); resolve(); } };
+			const timer = setInterval(check, ${POLL_MS});
 			check();
 		});
 		if (process.env.RUNTIME_FIXTURE_SWEEP_TARGET) {
@@ -180,6 +184,7 @@ if (process.env.RUNTIME_FIXTURE_HOLD === "1") {
 		const child = spawn(process.execPath, [runnerPath], {
 			stdio: ["ignore", "ignore", "pipe", "ipc"],
 			env: { ...process.env, HOME: join(root, "home"), USERPROFILE: join(root, "home"), PATH: join(root, "bin"), NODE_OPTIONS: "",
+				PI_CODING_AGENT_DIR: join(root, "home", ".pi"),
 				RUNTIME_FIXTURE_ROOT: root, RUNTIME_FIXTURE_ROUTE: route, RUNTIME_FIXTURE_INSTANCE: instance,
 				RUNTIME_FIXTURE_HOLD: hold ? "1" : "0", RUNTIME_FIXTURE_FAIL: fail ? "1" : "0", RUNTIME_FIXTURE_SWEEP_TARGET: sweepTarget, RUNTIME_FIXTURE_SWEEP_OPERATION: sweepOperation },
 		});
@@ -218,8 +223,8 @@ if (process.env.RUNTIME_FIXTURE_HOLD === "1") {
 	function started(instance) {
 		return new Promise((resolve) => {
 			const path = join(root, "started-" + instance);
-			const check = () => { if (existsSync(path)) { watcher.close(); resolve(JSON.parse(readFileSync(path, "utf8"))); } };
-			const watcher = watch(root, check);
+			const check = () => { if (existsSync(path)) { clearInterval(timer); resolve(JSON.parse(readFileSync(path, "utf8"))); } };
+			const timer = setInterval(check, POLL_MS);
 			check();
 		});
 	}

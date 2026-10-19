@@ -7,9 +7,9 @@ import { basename, dirname, extname, join, resolve as resolvePath, sep as pathSe
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
 import { checkGhAvailable, checkRepoSize, fetchViaApi, showGhHint } from "./github-api.ts";
-import { parseConfigRoot } from "./utils.ts";
+import { getWebSearchConfigPath, parseConfigRoot } from "./utils.ts";
 
-const CONFIG_PATH = join(homedir(), ".pi", "web-search.json");
+const CONFIG_PATH = getWebSearchConfigPath();
 
 const BINARY_EXTENSIONS = new Set([
 	".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svg", ".tiff", ".tif",
@@ -93,7 +93,10 @@ function normalizePositiveNumber(value: unknown, fallback: number): number {
 function normalizeClonePath(value: unknown, fallback: string): string {
 	if (typeof value !== "string") return fallback;
 	const normalized = value.trim();
-	return normalized.length > 0 ? normalized : fallback;
+	if (!normalized) return fallback;
+	const fromHome = normalized === "~" || normalized.startsWith("~/");
+	const expanded = (fromHome ? normalized.slice(1) : normalized).replace(/\$([A-Z_][A-Z0-9_]*)/gi, (match, name: string) => process.env[name] ?? match);
+	return fromHome ? homedir() + expanded : expanded;
 }
 
 function loadGitHubConfig(): GitHubCloneConfig {

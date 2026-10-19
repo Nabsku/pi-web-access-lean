@@ -26,7 +26,7 @@ async function fixture(t, config = {}) {
 		run(script) {
 			const child = spawnSync(process.execPath, ["--input-type=module"], {
 				encoding: "utf8",
-				env: { HOME: home, USERPROFILE: home, PATH: bin, NODE_OPTIONS: "", PI_CODING_AGENT_DIR: join(home, "agent") },
+				env: { HOME: home, USERPROFILE: home, PATH: bin, NODE_OPTIONS: "", PI_CODING_AGENT_DIR: join(home, ".pi") },
 				input: `
 					import assert from "node:assert/strict";
 					import dns from "node:dns/promises";

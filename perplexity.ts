@@ -1,13 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
 import { createCredentialSafeCancellation, hasCredentialSource, redactCredential, resolveCredential, type CredentialSafeCancellation } from "./credential-source.ts";
-import { isAbortError, parseConfigRoot } from "./utils.ts";
+import { getWebSearchConfigPath, isAbortError, parseConfigRoot } from "./utils.ts";
 
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions";
-const CONFIG_PATH = join(homedir(), ".pi", "web-search.json");
+const CONFIG_PATH = getWebSearchConfigPath();
 const REQUEST_TIMEOUT_MS = 30_000;
 
 const RATE_LIMIT = {

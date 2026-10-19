@@ -15,6 +15,7 @@ const apiModuleUrl = new URL("../github-api.ts", import.meta.url).href;
 const CLONE_TIMEOUT_SECONDS = 2;
 const RUNNER_TIMEOUT_MS = 10_000;
 const EXIT_TIMEOUT_MS = 2_000;
+// Poll persistent flags directly: directory events and initial stat baselines can miss them.
 const POLL_MS = 25;
 
 function records(root, name) {
@@ -87,8 +88,9 @@ record("commands.jsonl", { tool, args, at: Date.now() });
 if (args[0] === "--version") {
 	const finish = () => process.exit(process.env.GITHUB_PROCESS_ROUTE === "git" ? 1 : 0);
 	if (process.env.GITHUB_PROCESS_WAIT_PROBE !== "1") finish();
-	const check = () => { if (fs.existsSync(path.join(root, "probe-release"))) { watcher.close(); finish(); } };
-	const watcher = fs.watch(root, check);
+	const release = path.join(root, "probe-release");
+	const check = () => { if (fs.existsSync(release)) { clearInterval(timer); finish(); } };
+	const timer = setInterval(check, ${POLL_MS});
 	fs.writeFileSync(path.join(root, "probe-ready"), "ready");
 	check();
 	return;
@@ -140,6 +142,7 @@ if (mode === "resistant" || mode === "root-exits") {
 		root,
 		env: {
 			...process.env, HOME: join(root, "home"), USERPROFILE: join(root, "home"),
+			PI_CODING_AGENT_DIR: join(root, "home", ".pi"),
 			PATH: join(root, "bin"), NODE_OPTIONS: "",
 			GITHUB_PROCESS_ROOT: root, GITHUB_PROCESS_ROUTE: route, GITHUB_PROCESS_MODE: mode,
 			GIT_TERMINAL_PROMPT: "1", GCM_INTERACTIVE: "Always", GH_PROMPT_DISABLED: "0", GH_TOKEN: "synthetic-fixture-token",
@@ -151,7 +154,7 @@ if (mode === "resistant" || mode === "root-exits") {
 async function run(t, fixture, source) {
 	const runner = join(fixture.root, "runner.mjs");
 	await writeFile(runner, `
-		import { existsSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
+		import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 		import { getEventListeners } from "node:events";
 		import { join } from "node:path";
 		const { extractGitHub, clearCloneCache } = await import(${JSON.stringify(extractModuleUrl)});
@@ -161,8 +164,9 @@ async function run(t, fixture, source) {
 		const url = "https://github.com/owner/repo";
 		const requestAt = Date.now();
 		const waitForFile = (name) => new Promise((resolve) => {
-			const check = () => { if (existsSync(join(root, name))) { watcher.close(); resolve(); } };
-			const watcher = watch(root, check);
+			const path = join(root, name);
+			const check = () => { if (existsSync(path)) { clearInterval(timer); resolve(); } };
+			const timer = setInterval(check, ${POLL_MS});
 			check();
 		});
 		${source}
