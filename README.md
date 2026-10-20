@@ -168,6 +168,12 @@ a 16 KiB output limit, and a minimized environment; `OP_SESSION_*` variables are
 forwarded for shell-local 1Password sessions. Command text, stderr, and resolved
 credentials are not included in provider errors.
 
+On Windows, command sources use Git Bash from Git for Windows installation
+locations, then `bash.exe` on `PATH`, and fall back to `cmd.exe` when no suitable
+Bash is found. The legacy WSL launcher is not used. Standard Windows home,
+system and temporary-directory variables are forwarded; discovery and execution
+share the same five-second timeout and minimized environment.
+
 Configured Exa API keys use Exa's account limits directly. Any legacy
 `~/.pi/exa-usage.json` file is ignored and left untouched.
 
