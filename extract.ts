@@ -136,7 +136,20 @@ export async function extractContent(
 	return { ...httpResult, error: guidance };
 }
 
-function isLikelyJSRendered(html: string): boolean {
+// HTML JavaScript MIME essences; parameters in script type attributes are significant.
+const JAVASCRIPT_MIME_TYPES = new Set([
+	"application/ecmascript", "application/javascript", "application/x-ecmascript", "application/x-javascript",
+	"text/ecmascript", "text/javascript", "text/javascript1.0", "text/javascript1.1", "text/javascript1.2",
+	"text/javascript1.3", "text/javascript1.4", "text/javascript1.5", "text/jscript", "text/livescript",
+	"text/x-ecmascript", "text/x-javascript",
+]);
+
+function isExecutableScriptType(type: string | null): boolean {
+	const normalized = type?.trim().toLowerCase() ?? "";
+	return normalized === "" || normalized === "module" || JAVASCRIPT_MIME_TYPES.has(normalized);
+}
+
+function isLikelyJSRendered(html: string, scriptCount: number): boolean {
 	// Extract body content
 	const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
 	if (!bodyMatch) return false;
@@ -150,9 +163,6 @@ function isLikelyJSRendered(html: string): boolean {
 		.replace(/<[^>]+>/g, "")
 		.replace(/\s+/g, " ")
 		.trim();
-
-	// Count scripts
-	const scriptCount = (html.match(/<script/gi) || []).length;
 
 	// Heuristic: little text content but many scripts suggests JS rendering
 	return textContent.length < 500 && scriptCount > 3;
@@ -332,14 +342,14 @@ async function extractViaHttp(
 		}
 
 		const { document } = parseHTML(text);
+		// Capture executable scripts before Readability removes them from the document.
+		const executableScripts = Array.from(document.querySelectorAll("script"))
+			.filter(script => isExecutableScriptType(script.getAttribute("type")));
 		// Inspect actual bootstrap scripts, not quoted examples or embedded widgets.
 		if (/^Just a moment\.\.\.$/i.test(document.title.trim()) &&
-			Array.from(document.querySelectorAll("script:not([src])")).some(script => {
-				const type = script.getAttribute("type")?.trim() || "";
-				return (!type || /^(?:(?:text|application)\/javascript|module)$/i.test(type)) &&
-					script.textContent?.includes("window._cf_chl_opt") &&
-					script.textContent.includes("/cdn-cgi/challenge-platform/");
-			})) {
+			executableScripts.some(script => !script.hasAttribute("src") &&
+				script.textContent?.includes("window._cf_chl_opt") &&
+				script.textContent.includes("/cdn-cgi/challenge-platform/"))) {
 			throw new Error(challengeError);
 		}
 		const reader = new Readability(document as unknown as Document);
@@ -355,7 +365,7 @@ async function extractViaHttp(
 			activityMonitor.logComplete(activityId, response.status);
 
 			// Provide more specific error message
-			const jsRendered = isLikelyJSRendered(text);
+			const jsRendered = isLikelyJSRendered(text, executableScripts.length);
 			const errorMsg = jsRendered
 				? "Page appears to be JavaScript-rendered (content loads dynamically)"
 				: "Could not extract readable content from HTML structure";
@@ -381,7 +391,7 @@ async function extractViaHttp(
 			}
 		}
 
-		if (markdown.length < MIN_USEFUL_CONTENT && isLikelyJSRendered(text)) {
+		if (markdown.length < MIN_USEFUL_CONTENT && isLikelyJSRendered(text, executableScripts.length)) {
 			return {
 				url,
 				title: article.title || "",
