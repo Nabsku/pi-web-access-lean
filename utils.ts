@@ -19,7 +19,14 @@ export function getWebSearchConfigPath(): string {
 }
 
 export function parseConfigRoot(raw: string): Record<string, unknown> {
-	const parsed: unknown = JSON.parse(raw);
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (err) {
+		// Native syntax errors can quote credentials from the configuration.
+		if (err instanceof SyntaxError) throw new SyntaxError("invalid JSON");
+		throw err;
+	}
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 		throw new Error("expected a JSON object");
 	}
