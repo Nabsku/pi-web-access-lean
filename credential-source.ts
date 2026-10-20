@@ -1,15 +1,22 @@
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 5_000;
 const MAX_CREDENTIAL_BYTES = 16_384;
 const ENV_SOURCE = /^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})$/;
 const OP_SESSION_NAME = /^OP_SESSION_[A-Za-z0-9_]+$/;
+// The legacy WSL launcher needs stdin handling; credential commands fall back to cmd.exe.
+const LEGACY_WSL_BASH = /^[a-z]:\\windows\\(?:system32|sysnative)\\bash\.exe$/i;
 const COMMAND_ENVIRONMENT_NAMES = [
 	"HOME", "USER", "LOGNAME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR",
 	"XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK",
 	"WSL_DISTRO_NAME", "WSL_INTEROP",
+	// Git Bash derives HOME from USERPROFILE; Windows children need their base environment.
+	"SystemRoot", "windir", "ComSpec", "PATHEXT", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+	"APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
 ] as const;
 
 export type CredentialFailureCategory =
@@ -102,15 +109,59 @@ function escapedSource(source: string): string | null {
 	return null;
 }
 
+async function bashOnPath(options: CredentialCommandOptions): Promise<string | null> {
+	try {
+		const { stdout } = await execFileAsync("where", ["bash.exe"], {
+			encoding: "utf8",
+			env: options.environment,
+			maxBuffer: options.maxOutputBytes + 1,
+			signal: options.signal,
+			timeout: options.timeoutMs,
+			windowsHide: true,
+		});
+		return stdout.trim().split(/\r?\n/)[0] || null;
+	} catch (error) {
+		const code = error && typeof error === "object" ? (error as { code?: string | number }).code : undefined;
+		if (!options.signal?.aborted && (code === 1 || code === "ENOENT")) return null;
+		throw error;
+	}
+}
+
+async function findWindowsBash(
+	environment: Record<string, string | undefined>,
+	exists: (path: string) => boolean,
+	findOnPath: () => Promise<string | null>,
+): Promise<string | null> {
+	for (const root of [environment.ProgramFiles, environment["ProgramFiles(x86)"]]) {
+		const candidate = root ? `${root}\\Git\\bin\\bash.exe` : null;
+		if (candidate && exists(candidate)) return candidate;
+	}
+	const found = await findOnPath();
+	return found && exists(found) && !LEGACY_WSL_BASH.test(found.replace(/\//g, "\\")) ? found : null;
+}
+
 async function defaultRunCommand(command: string, options: CredentialCommandOptions): Promise<CredentialCommandResult> {
-	const result = await execAsync(command, {
+	const deadline = Date.now() + options.timeoutMs;
+	const remainingTime = (): number => {
+		options.signal?.throwIfAborted();
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) throw Object.assign(new Error("Credential command deadline exceeded"), { code: "ETIMEDOUT" });
+		return remaining;
+	};
+	const bash = process.platform === "win32"
+		? await findWindowsBash(options.environment, existsSync, () => bashOnPath({ ...options, timeoutMs: remainingTime() }))
+		: null;
+	const execOptions = {
 		encoding: "utf8",
 		env: options.environment,
 		maxBuffer: options.maxOutputBytes + 1,
 		signal: options.signal,
-		timeout: options.timeoutMs,
+		timeout: remainingTime(),
 		windowsHide: true,
-	});
+	} as const;
+	const result = bash
+		? await execFileAsync(bash, ["-c", command], execOptions)
+		: await execAsync(command, execOptions);
 	return { stdout: result.stdout };
 }
 

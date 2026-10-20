@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- Ported upstream's Windows credential-command fix: prefer Git Bash, retain the cmd fallback, and forward standard Windows base variables while keeping lookup and execution inside the existing timeout and minimized environment.
 - Ported relevant upstream v0.14 fixes while preserving the lean tool surface: lazy content extraction, answer-only search rendering, runtime-bundled TypeBox, quieter Node 22 PDF extraction, configured-provider precedence, and request-time Exa/Perplexity credential sources.
 
 ### Changed

@@ -30,3 +30,20 @@ test("credential failures and provider errors do not disclose secrets", async ()
 	);
 	assert.equal(redactCredential("request rejected for secret-key", "secret-key"), "request rejected for [redacted]");
 });
+
+test("command sources forward Windows base variables without unrelated credentials", async () => {
+	const windows = {
+		SystemRoot: "C:\\Windows", windir: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe", PATHEXT: ".EXE;.CMD",
+		USERPROFILE: "C:\\Users\\fixture", HOMEDRIVE: "C:", HOMEPATH: "\\Users\\fixture",
+		APPDATA: "C:\\Users\\fixture\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\fixture\\AppData\\Local",
+		TEMP: "C:\\Temp", TMP: "C:\\Temp", ProgramData: "C:\\ProgramData",
+		ProgramFiles: "C:\\Program Files", "ProgramFiles(x86)": "C:\\Program Files (x86)",
+	};
+	let received;
+	assert.equal(await resolveCredential({
+		provider: "Exa", configuredValue: "!fixture",
+		environment: { ...windows, UNRELATED_SECRET: "drop", EXA_API_KEY: "drop", PERPLEXITY_API_KEY: "drop", OP_SERVICE_ACCOUNT_TOKEN: "drop" },
+		runCommand: async (_command, options) => { received = options.environment; return { stdout: "value\n" }; },
+	}), "value");
+	assert.deepEqual(received, windows);
+});
