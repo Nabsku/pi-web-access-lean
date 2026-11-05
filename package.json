@@ -27,7 +27,7 @@
     "p-limit": "^7.3.0",
     "promise.try": "^2.0.1",
     "turndown": "^7.2.0",
-    "unpdf": "^1.6.2"
+    "unpdf": "^2.1.0"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.99.2",
